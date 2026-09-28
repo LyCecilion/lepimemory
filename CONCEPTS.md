@@ -63,7 +63,7 @@
 
 **要写的胶水**不是适配层，而是「1 个插件包 + 1 个 profile」：
 
-- 配置层（0 代码）：profile 声明 + `cordis.patch.yml` 按 row id 禁用编码向工具（fs/shell/lsp/skills/agent-instructions 等）。核心包（session/tools/agent-loop/llm）领域中立，编码假设集中在 bundle 行。
+- 配置层（0 代码）：profile 声明 + `cordis.patch.yml`；编码向能力（fs/shell/lsp/skills/agent-instructions 等）的裁剪落在 **agent preset 的 plugins 列表**（已实测：Web 面下会话能力由 preset 决定，见 `docs/research/dsh-findings.md` §2.7）。核心包（session/tools/agent-loop/llm）领域中立，编码假设集中在 bundle 行。
 - Host 插件层（主要工作量）：声明 `dsh:{manifestVersion:1, bundle:{patch}, client}`，实现状态机、记忆桥、审计事件。
 - Client 插件层：状态外化面板、记忆归因卡、Avatar overlay。
 
@@ -78,7 +78,7 @@
 | 什么成为记忆 | `retain` 走 LLM 抽取事实/实体/时间/关系；`retain_mission` 窄化、`retain_extraction_mode` 五档（含零 LLM 成本的 `chunks`）、`retain_strategies` 命名策略 |
 | 冲突处理 | **观察（observation）refine-not-overwrite**：新证据强化/削弱/扩展既有信念而非静默替换，带 exact quotes 与 proof_count |
 | 遗忘 | `PATCH state=invalidate` 移入 `invalidated_memory_units` 冷归档，**可无损 revert**；另有显式 DELETE 级联 |
-| 回忆 | 四臂并行（semantic/keyword BM25/graph/temporal）→ RRF 融合 → cross-encoder 重排 → token 预算裁剪 |
+| 回忆 | 四臂并行（semantic/keyword BM25/graph/temporal）→ RRF 融合 → cross-encoder 重排 → token 预算裁剪。⚠️ 中文部署下 keyword 臂停用，见 §6 |
 | 「宁缺勿滥」 | `min_scores` 结果级地板可做弃权；`prefer_observations` 观察优先 |
 | 可解释召回 | **`trace: true` 返回完整 `SearchTrace`**：每臂 rank/score、RRF 的 `source_ranks`、重排 `rank_change`、阶段耗时 |
 
@@ -92,6 +92,7 @@
 - per-bank 无法改模型/provider（`_CONFIGURABLE_FIELDS` 双重过滤），每个角色不同模型需多实例。
 - 召回结果**无 post-hook 可变改写**；深度定制打分需 fork 或实现 `MEMORIES` 存储扩展。
 - 版本迭代快，扩展是仓库内 in-process 包、随镜像分发。
+- **中文场景下关键词（BM25）臂在本部署不可用**：内嵌 `pg0` 无 CJK 分词扩展，`native` 后端对中文不切词。取舍见 §6。
 
 **接入姿势**：以 REST 为契约当记忆微服务。需要一个自研 `OPERATION_VALIDATOR` 扩展来控制写入与召回作用域（这是唯一需要跟着它版本升级的组件，隔离成单独模块）。
 
@@ -300,6 +301,15 @@ dsh 另有现成设施可复用：`sessionTelemetry` seam（含 OTel backend）�
 | recall 无流式 | 记忆召回不是 Lv4 首字延迟的瓶颈；首字反馈靠 dsh 全链路流式 + 状态外化 |
 | 两套运行时（TS + Python） | 语言边界清晰，用 REST 隔离；代价是多一个进程 |
 | 需自研 TTS（dsh 只有 STT） | 直接使用现成语音合成服务，题目明确不要求自行实现 |
+| **中文停用 BM25 关键词臂**（CJK 无分词扩展） | 见下方说明；蝶忆是中文语义记忆，语义 + 图臂已足够，不为它牺牲单容器部署 |
+
+> **关于 BM25（关键词臂）的取舍**：Hindsight 检索默认四臂（semantic / keyword BM25 / graph / temporal）。
+> 但 BM25 本质是**字面分词匹配**，而内嵌 `pg0` 既无 CJK 分词（`native` 后端把中文整串当 1 个 token），
+> 也装不了 `pgroonga` / `pg_search`（两者都要求外置 PostgreSQL）。
+> 蝶忆是**中文语义记忆**，回忆是聊天式查询——正是语义 + 图扩展的主场；实测关键词臂贡献为 0，
+> 语义栈修好后召回已精准、并能自然弃权。为 BM25 引入第二个常驻 PG 服务，会牺牲「单容器开箱即用」，
+> 得不偿失。**决定：中文部署下弃用关键词臂（现状下它对中文不生效），检索仅依赖 semantic + graph + temporal。**
+> 若未来确有字面检索需求，再加官方 `docker/docker-compose/pgroonga/` 变体作为可选部署。
 
 **风险与对策**：
 
@@ -318,7 +328,7 @@ dsh 另有现成设施可复用：`sessionTelemetry` seam（含 OTel backend）�
 形式是**面试 presentation（PPT）+ 公开 GitHub 仓库**，不是可发布产品。因此交付物定为：
 
 | 交付物 | 作用 |
-|---|---|
+| --- | --- |
 | GitHub 仓库 | dsh profile + 自研插件包 + `docker-compose.yml` + `Makefile` + 文档 |
 | PPT | 讲清问题定义、三个核心决策、取舍、闭环演示 |
 | **`docs/DEMO.md`** | 评委自助路径：`make dev` → 打开 :3080 → 按剧本走 |
@@ -328,7 +338,7 @@ dsh 另有现成设施可复用：`sessionTelemetry` seam（含 OTel backend）�
 
 ```
 docker compose up -d                    → Hindsight（内含 pg0），等健康检查
-pnpm dsh web --profile lepimemory       → dsh 本地跑，加载自研插件
+pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 ```
 
 **为什么不打包成单个容器**：
@@ -350,7 +360,7 @@ pnpm dsh web --profile lepimemory       → dsh 本地跑，加载自研插件
 
 题目说「不要求 Production Ready」，但**评委大概率会自己跑一遍**。所以：
 
-1. **模型凭据必须可替换**：`HINDSIGHT_API_LLM_API_KEY` + dsh provider 配置走 `.env`；**绝不硬编码任何人的 key**；提交 `.env.example`。
+1. **模型凭据与端点必须可替换**：`HINDSIGHT_API_LLM_API_KEY` / `HINDSIGHT_API_LLM_BASE_URL`、dsh 的 `GEEK_TECH_CLUB_API_KEY` / `LEPI_LLM_BASE_URL` **全部走 `.env`**；**绝不硬编码任何人的 key 或端点地址**；提交 `.env.example`（留空占位）。
 2. **首次启动时间要写清**：Hindsight 首启需建 PG + 拉 embedding 模型，可能数分钟。README 必须写明「第一次启动请等待 X 分钟」。
 3. **状态可一键清理**：`DSH_HOME` 与 PG 卷都要能干净重置，否则评委会拿到一个状态诡异的实例。
 4. **零 key 也能看到点什么**：至少让演示剧本的前几步在无外部 LLM key 时仍可运行（Hindsight 的 `chunks` 模式零 LLM 成本），避免评委第一时间就卡死。
