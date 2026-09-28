@@ -307,6 +307,65 @@ dsh 另有现成设施可复用：`sessionTelemetry` seam（含 OTel backend）�
 2. **Hindsight 部署重量**（PG + LLM provider）→ 先用单机 Docker/内嵌 `pg0`；embedding/reranker 可走远程或 `local-ml` extras。
 3. **人格状态机退化成一个大的 `if` 集合** → 规则显式声明为数据（可列举、可测试），而不是散落在控制流里；每条规则配单元测试与「为什么这条规则存在」的注释。
 4. **审计信息量淹没可读性** → 审计有两档：机器可读的完整事件流，与人可读的归因摘要。UI 默认展示后者，可下钻到前者。
+5. **评委自行运行时卡死** → 见 6.5；凭据可替换、启动时间透明、状态可重置、零 key 有降级路径。
+
+---
+
+## 6.5 部署与交付
+
+### 交付物
+
+形式是**面试 presentation（PPT）+ 公开 GitHub 仓库**，不是可发布产品。因此交付物定为：
+
+| 交付物 | 作用 |
+|---|---|
+| GitHub 仓库 | dsh profile + 自研插件包 + `docker-compose.yml` + `Makefile` + 文档 |
+| PPT | 讲清问题定义、三个核心决策、取舍、闭环演示 |
+| **`docs/DEMO.md`** | 评委自助路径：`make dev` → 打开 :3080 → 按剧本走 |
+| **录屏 / GIF** | 现场跑不起来时的保底 |
+
+### 部署形态：docker compose + 本地跑 dsh
+
+```
+docker compose up -d                    → Hindsight（内含 pg0），等健康检查
+pnpm dsh web --profile lepimemory       → dsh 本地跑，加载自研插件
+```
+
+**为什么不打包成单个容器**：
+
+- Hindsight 官方镜像**已经内含 pg0**（`-v hindsight-data:/home/hindsight/.pg0` 那个卷就是 PG），所以「PG 塞进去」不是问题，上游已解决。
+- 但把 Node 叠到 Python 基础镜像上会膨胀到 GB 级，且**开发期改插件要重建整个镜像**——开发循环是决定性的。
+- 两个服务日志混在一个 stdout，调试变差。
+
+**为什么这个组合最优**：
+
+- 插件改完直接重启 dsh，不碰容器
+- :9999 是 Hindsight 自带 UI，调试记忆时极有用
+- 用 `Makefile` 把两步串起来，评体验与单容器一致
+- 语言边界天然隔离（TS / Python），与本文第 3 节的 REST 契约一致
+
+**Fallback（无 Docker 环境）**：`pip install hindsight-api && hindsight-api`，它会自行起内嵌 pg0。写进 README，避免「评委没有 Docker」时无解。
+
+### 评委自行运行：必须保证的事
+
+题目说「不要求 Production Ready」，但**评委大概率会自己跑一遍**。所以：
+
+1. **模型凭据必须可替换**：`HINDSIGHT_API_LLM_API_KEY` + dsh provider 配置走 `.env`；**绝不硬编码任何人的 key**；提交 `.env.example`。
+2. **首次启动时间要写清**：Hindsight 首启需建 PG + 拉 embedding 模型，可能数分钟。README 必须写明「第一次启动请等待 X 分钟」。
+3. **状态可一键清理**：`DSH_HOME` 与 PG 卷都要能干净重置，否则评委会拿到一个状态诡异的实例。
+4. **零 key 也能看到点什么**：至少让演示剧本的前几步在无外部 LLM key 时仍可运行（Hindsight 的 `chunks` 模式零 LLM 成本），避免评委第一时间就卡死。
+
+### 演示剧本
+
+演示**不做现场即兴**，用脚本化剧本，且剧本要刻意设计成能展示闭环：
+
+1. 聊几轮，埋下一条信息（如「我下周三要去见一个重要的人」）
+2. **换一个会话**（证明跨会话记忆）→ 角色主动问起这件事
+3. 打开审计面板：**这句话被哪条记忆驱动**
+4. 让角色执行一个真实行动（产生真实副作用，非「我帮你记下了」）
+5. 要求「忘掉刚才那个人」→ 展示**遗忘计划预览** → 确认 → 展示后续不再提起
+
+第 5 步对应 `DESIGN_NOTES.md` §2，是相对「普通 Agent 基线」最能拉开差距的一段——大多数实现会把「忘记」做成一个 DELETE。
 
 ---
 
