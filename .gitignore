@@ -165,7 +165,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
+!dsh/plugins/**/lib/
 lib64/
 parts/
 sdist/
