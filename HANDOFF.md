@@ -92,12 +92,132 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
    且演示模式下降低并发（一次交互只发一次 recall，不并发 retain）。
    退避失败时**降级为无记忆回答**并写审计事件（不要让评委面前当场 500）。
 
-**Git 状态备忘（2026-09-28 23:10，Agent 记录）**：
+**Git 状态备忘（2026-09-29 更新，Agent 复核）**：
 
-- 今晚 22:56–23:05 完成公开前脱敏与「工作区纪律」建制（见下方专节）；全仓对照 `.sanitize-patterns` 扫描**无残留**；端点与 key 全部收进 `.env`。
-- 22:59 曾有一次**提交排练**：`6054b74`（12 个基础设施文件，未 GPG 签名），38 秒后 reset 回工作区。**处置待确认**——建议：并入文档改动重做一笔完整提交（并 GPG 签名）；`6054b74` 留在 reflog 可作参照。
-- 当前 `HEAD`=`816ee5e`（未推送）；`origin/main`=`51082c0`；**全部工作未提交、未推送**。
-- 明天顺序建议：① 脱敏复查（命令见「工作区纪律」）② 确认提交安排 ③ 提交（GPG 需本人在场解锁）④ push 到 GitHub。
+- 脱敏复查已跑：全仓对照 `.sanitize-patterns` **零残留**；`.env` / `.dsh/` **从未被追踪、历史中从未出现**（`git log --all --name-only` 核验）。
+- 提交已完成：`55d6f86` → `330792a` 共 5 笔，**全部 GPG 签名**（`%G?` 均为 `G`），工作区干净。
+- 排练提交 `6054b74`（未签名）已**并入正式提交重做**，处置完毕；它仍在 reflog 中可达，可作参照，无需清理。
+- 待办：**本地领先 `origin/main`（`51082c0`）5 笔，尚未 push**——push 时机由本人决定。
+
+## 待修清单（2026-09-29，Agent 复核发现，按优先级）
+
+> 交接给修复者：每条都有「复现 / 修法 / 验收」。P0 两条会让**评委全新 clone 后 `make dev` 直接失败**，本机因 `~/.dsh` 已有同名 profile 被掩盖。
+
+### P0-1 🚨 插件源码被 `.gitignore` 整个吞掉（最高优先级）
+
+- **根因**（已定位到行）：`.gitignore:168` 的 `lib/` 规则**没有前导斜杠**，因此匹配**任意层级**的 `lib/` 目录。它来自文件头的 toptal 模板（第 12 行：`templates=…,python,…` 的「Distribution / packaging」段），本意是忽略 Python 打包产物，却误吞了插件的源码目录。
+- **现象**：`dsh/plugins/dsh-lepimemory-state/` 下只有 `cordis.patch.yml` + `package.json` 进了仓库，**`lib/index.js` 是 untracked + ignored**。`git status --short` 里也看不到它，所以**任何对它的编辑都不会被提交**。
+- **后果（这条是交付红线）**：克隆仓库后 `package.json` 的 `main: ./lib/index.js` 指向不存在的文件 → 插件加载失败 → `make dev` 与整个 Phase 1 演示崩掉。而「确保项目在 GitHub 上可跑」正是本次交付的核心要求。
+- **全仓影响面**（已扫）：`git status --ignored` 过滤掉预期的 `.env` / `.dsh/` / `.sanitize-patterns` / `node_modules/` 后，**只有这一个目录被误吞**，无其他漏网。（Python 模板段里还有 `build/` `dist/` `var/` `parts/` 等泛匹配规则，本次未命中，但同样值得留意。）
+- **修法（推荐后者，防复发）**：
+  - 应急：`git add -f dsh/plugins/dsh-lepimemory-state/lib/index.js`；或
+  - **根治**：把第 168 行收窄为 `/lib/`，并加否定规则 `!dsh/plugins/**/lib/`。收窄避免继续误吞未来其他层级的 `lib/`。
+- **验收**：`git ls-files dsh/plugins` 能看到 `lib/index.js`；`git clone` 到 `/tmp` 后该文件存在；`git status --ignored` 不再列出它。
+- **注意**：本次 Agent 对该文件的编辑（`order` 命名常量 + 依据注释）**位置已变但未入库**——修完本题后要确认这笔改动一并提交，否则会被静默丢弃。
+
+### P0-2 `make dev` 启动 dsh 时没传 `DSH_HOME`
+
+- **现象**：Makefile 里 `DSH_HOME ?=` 只是 make 变量、未 export。`install-profile` 显式带了 `DSH_HOME=...`，把 profile 装进 `./.dsh`；但 `dev` 那行（第 29 行）启动 dsh 时**没带**，dsh 回落到 `~/.dsh`。
+- **复现**（已跑过）：`DSH_HOME=/tmp/dsh-fresh-test/home dsh --profile lepimemory` → `Error: dsh: profile "lepimemory" does not exist`。本机能跑只是因为 `~/.dsh/profiles/lepimemory` 碰巧存在。
+- **修法**：Makefile 在 `DSH_HOME ?=` 下一行加 `export DSH_HOME`，然后删掉第 35 行多余的 `DSH_HOME=$(DSH_HOME)` 前缀（两处写法统一）。
+- **验收**：`make -n dev` 输出中 dsh 进程能拿到 `DSH_HOME`；最硬的验收是临时把 `~/.dsh/profiles/lepimemory` 改名，`make dev PORT=3181` 仍能起来（验完改回来）。
+
+### P1 未提交的文档修复（本次 Agent 已改，待你复核后提交）
+
+`git diff` 里 5 个文件，均为文档：
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `README.md` | 第 19 行 autolink 语法修复（原 `**<http://…**，按>` 错位）；去掉「骨架草稿」注释头 |
+| `HANDOFF.md` | Git 备忘改成现状（5 笔已签名、未 push、`6054b74` 已处置）；本清单 |
+| `docs/research/dsh-findings.md` | §6.3 补「persona 遮蔽是**必须项**」+ A/B 证据 + 槽位机制依据 |
+| `docs/research/artifacts/ab-fake-persona.md` | 状态 B 下加警示：coding-agent 口吻是底座人设渗透，**别当角色文案范例** |
+| `docs/research/hindsight-findings.md` | §4.2（分数饱和）、§4.3（BM25）标注「已于 §6.6 / §6.4 解决」，防止与后文矛盾 |
+
+插件 `lib/index.js` 的改动（`order: 50` → 命名常量 `STATE_SECTION_ORDER` + 依据注释；**排序位置没变**）已随 P0-1 修复一并入库（commit `6b2ae9e`）。
+
+> 更正：上一轮我建议「改成 `order: 200` 以落在人设之后」是**错的**——200 与 50 同在 `(0, 500)` 区间，相对人设位置完全一样。人设槽位只有 prefix=0 和 suffix=10200，中间全是工具/策略段，50 已经紧贴 prefix 之后。正确的改进只是命名 + 写依据。
+
+### 补充：关于 `order` 的另一个方案（已评估，**未采用**，留档）
+
+Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`，可运行时取
+`ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX')`（**已实测该 API 确实在 `ctx.systemPrompt` 上**，
+`packages/core/system-prompt/src/index.ts:470`），再靠 section 名排序自然落在 `deployment:persona-prefix` 之后。
+
+**不采用的理由**：① 同一个 order 值下，排序退化为 **section 名的 code-unit 比较**（已实测
+`'deployment:persona-prefix' < 'lepimemory:state'` 成立），这让「状态紧跟人设」依赖**词典序巧合**——
+未来任何注册名排在两者之间的 section 都会挤进来；② 它把位置的确定性从「本插件可控」转移到
+「依赖 person suffix 槽位的取值语义」，而那个槽位（10200）本意是**收尾**，不是「人设正文结束处」。
+
+自持常量 + 写清依据的现值更稳。**这条是有意选择的取舍，不是遗漏**；若将来上游给出人设正文之后的
+命名槽位，应改用那个槽位。
+
+### P2 仍开着的两个旧待办
+
+1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
+2. `docs/DEMO.md` 仍是骨架草稿（头部注释 + 「待补」），剧本每步的预期现象/解说词要在竖切闭环跑通后补。
+
+## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储
+
+**目标**：`dsh-lepimemory-state` 不再读 `config.state` 字符串，改为读一份**持久化、结构化**的状态，并在每次 prompt 组装时实时渲染。这是状态机的地基，也验证「插件能读写跨会话的持久状态」。
+
+**已调研的结论**：
+
+#### ⚠️ 更正：上一版此处有一条**错误结论**（务必按这版）
+
+9-29 我写的是「npm 上 `@deepseek-ai/dsh-storage-domain` 只有 `0.0.1-rc.1`，所以手写内部结构」——**这是错的**。
+错因：`pnpm view <pkg> version` 默认读 **`latest` dist-tag**，它停在旧 rc，不代表新版本不存在。实测：
+
+```
+pnpm view @deepseek-ai/dsh-storage-domain dist-tags
+  { "latest": "0.0.1-rc.1", "alpha": "0.1.7-alpha.2", "next": "0.2.0-rc.1" }
+pnpm view @deepseek-ai/dsh-storage-domain@0.1.7-rc.2 version   → 0.1.7-rc.2 ✅
+```
+
+**与运行时同版（`0.1.7-rc.2`）是可安装的。** 正确做法是
+`import { defineDomain } from '@deepseek-ai/dsh-storage-domain'` + 同版本依赖，
+**绝不手写 `{name,version,tables,global}` 复刻内部形状**——那耦合未文档化的内部结构，
+直接违反 `CONCEPTS.md` 定的「只依赖文档化扩展点」纪律。
+
+> 复核命令：用 `pnpm view <pkg> versions` 看全量，**不要**用 `pnpm view <pkg> version`（只返回 latest）。
+
+#### 两条路：先选小的（推荐路 B）
+
+本步目标只是「证明能读写跨会话持久状态」。两条路都能达成，代价差很多：
+
+| | 路 A：`ctx.storageDomain`（正规但重） | 路 B：插件自持 JSON 快照（**推荐先走**） |
+| --- | --- | --- |
+| 挂载侧 | ✅ 无需加行——`dsh-base` 已挂 storage / storage-json(root=`dshHomePath('storages')`) / storage-domain（`packages/bundle/base/cordis.patch.yml:161-177`） | 同左，但不使用它 |
+| 插件侧 | ⚠️ **需新增 2 条依赖**（`@deepseek-ai/dsh-storage-domain@0.1.7-rc.2` + `zod@4.x`）。插件目前**零依赖、无 node_modules**，profile 只 link 了它自己；新依赖能否在 `dsh plugin install` 下解析，**尚未验证** | ✅ 零依赖，`node:fs` 足够 |
+| 收益 | schema 校验、写入持久化后才 resolve、每次写发 `domain/changed` 事件 | 只需「能存能读」 |
+| 风险 | 依赖解析未验 + 上游预稳定 | 无 |
+
+**判断**：本步走 **路 B**——先把闭环跑通；schema 与变更事件留给真正需要它的状态机阶段（那时 `domain/changed` → 审计事件才真有价值）。若改走路 A，**必须先实测依赖在 `dsh plugin install` 下能解析**，再把结论写进文档。
+
+**实现要点（两路共用）**：
+
+- **插件声明 `inject: ["systemPrompt"]`**（路 A 再加 `"storageDomain"`）。`storageDomain.open()` 是异步的，需在 `apply` 里 open、在 effect disposer 里 `domain.close()`。
+- **section 的 `text` 可传函数** `(context) => string`，每次组装都调用——路 B 靠这个「每轮重读文件」，改状态**无需重启 dsh**（选路 B 的关键理由：验证循环最快）。
+- 路 B 路径解析：优先 `config.stateFile`，否则基于 `process.env.DSH_HOME`（P0-2 修完后已 export，插件可见）。
+
+**建议的状态结构**（对齐 `DESIGN_NOTES.md` §1.4，先少而正交）：
+
+```
+mood:      { valence, arousal, updatedAt }      —— 心境，将来要衰减
+relation:  { trust, closeness, familiarity }    —— 对用户，不自然衰减
+reasons:   [{ dimension, text, at }]            —— 最近变化的原因（渲染「为什么」用）
+```
+
+渲染层**不输出数值**，按 `DESIGN_NOTES.md` §1.3 输出「相对基线 + 原因 + 行为倾向」的文本；阈值先写死几档，标注为待实测。
+
+**本步不做**：状态更新规则（事件驱动的状态机本体）、衰减、审计事件。本步只要「能存、能读、能渲染、能跨重启」。状态先用一个手动入口改（例如 `ctx.commands` 注册一个 `/state` 调试命令，或直接改 storages 下的 JSON 再重启），证明改状态 → 语气变化即可。
+
+**验收**：
+
+1. 全新 `DSH_HOME` 下首次启动，自动写入初始状态（`storages/` 下出现对应 JSON）。
+2. 改状态（命令或文件）后，同一输入的回复语气随之变化——复用 `ab-fake-persona.md` 的 A/B 做法。
+3. 重启 dsh 后状态仍在。
+4. 手动把 JSON 改坏，启动时**报错且错误信息指明哪个字段**（`storageDomain` 的 `invalid-record` 会自带），不静默回落默认值。
 
 **Phase 1 的任务清单**（详见 `CONCEPTS.md` §7）：
 

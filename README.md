@@ -1,4 +1,4 @@
-<!-- README 骨架草稿 v0.1（由 Agent 起草，待定稿）— 数字/叙述请复核后再对外 -->
+<!-- Lepimemory — 极创工作室第二次面试题 -->
 
 # 蝶忆 Lepimemory
 
@@ -16,7 +16,7 @@ cp .env.example .env     # 可选：填入模型 key；留空也能看到前几�
 make dev                 # 起 Hindsight + dsh；首次启动需拉多语言模型（约 1–2 分钟）
 ```
 
-然后打开 **<http://127.0.0.1:3080**，按> `docs/DEMO.md` 的剧本走。
+然后打开 <http://127.0.0.1:3080>，按 `docs/DEMO.md` 的剧本走。
 
 - ⏳ **首次启动**：Hindsight 首次会经 `hf-mirror` 拉两个多语言模型（约 1–2 分钟，视网速），缓存在卷 `hindsight-hf-cache`；之后启动约 16 秒。`make dev` 会等 Hindsight 健康检查通过。
 - 🔌 本机 3080 被占用时：`make dev PORT=3181`。

@@ -87,6 +87,18 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 2. **裁剪**：新增 `preset-lepimemory`（persona 占位 / tool-ask-user / tool-web / compaction 暂禁），并把 `agent-preset-registry` 默认指向它；编码向工具不挂载；「行动工具」留给自研插件。
 3. **人设**：preset 的 persona 行按 per-agent 遮蔽部署级「coding agent」文案（无需改全局 `system-prompt`）；正式人设文本由自研插件在 Phase 1 通过 PERSONA 槽位接管。
 
+   ⚠️ **persona 遮蔽是必须项，不是美化项**——A/B 实验直接提供了证据：
+   `artifacts/ab-fake-persona.md` 状态 B 的回复里，模型自称
+   「我这"一天"其实就是在 `/tmp/lepimemory-dsh-tests` 这个工作目录里待命，随时准备帮你跑命令、翻文件、查资料」。
+   该 A/B 已证明「状态文本能改变语气」，但**同一份证据也说明底座 coding-agent 人设会渗透出来**：
+   状态只改语气，改不掉身份自述。故遮蔽必须在 Phase 1 落地，且正式人设文本不能照抄状态 B 的措辞
+   （它仍是 coding agent 口吻，非目标角色文案）。
+
+   **机制依据**（`packages/preset/persona/src/index.ts:64-71`）：persona 包的 prefix / suffix
+   就是 `DEPLOYMENT_PERSONA_PREFIX`(order 0) 与 `DEPLOYMENT_PERSONA_SUFFIX`(order 10200)
+   两个中央槽位；preset 内的 persona 行以**同名 section** 注册，故在 agent scope 内 shadow 全局贡献
+   （`system-prompt` 的 scoped section 同名即遮蔽）。
+
 **评审点**：① 默认 provider 是否切换；② 裁剪清单取舍（web / ask-user / compaction）；③ 行动工具形态；④ 评审通过后：应用到运行实例 + 重启 + 回归验证。
 
 ## 7. 部署脚手架（草案 v0.1，仓库根目录）

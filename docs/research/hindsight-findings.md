@@ -121,9 +121,13 @@ trace = { query, retrieval_results[], rrf_merged[], reranked[], entry_points[], 
 ## 4. 影响 Lepimemory 设计的发现（重要）
 
 1. **聚合站限流（HTTP 429）**：`deepseek-flash` 在连续多次调用后触发 `ModelArts.81111/81114`，Hindsight 重试 4 次仍失败 → API 返回 500。演示与压测必须**控速/退避**，或换限速更宽的模型。这条会让「评委自助演示」偶发失败，需在 README 里给预案。
-2. **本地 embedding/reranker 分数饱和**：对**不相关** query，`semantic` 仍 0.70–0.84、`reranker`(归一化) 压在 **0.995–0.9996**、`final` ≈ 1.09。→ **基于分数的弃权/阈值极不可靠**。「宁缺勿滥」需要另想办法（如 LLM 逐条判定相关性、或按 query 动态校准），不能指望 `min_scores` 开箱即用。
-3. **BM25 中文臂返回 0**：`bm25` 对 world/experience/observation 三组全返回 0 条，实际检索只靠 `semantic + graph`。需确认是中文分词问题还是 `enable_text_search` 配置问题；直接影响「关键词召回」的可用性假设。
-4. **`final` 分不是 0–1 区间**（实测 ≈1.09），`reranker` 虽 0–1 但饱和。做审计面板展示分数时不能假设 `final` 归一到 1。
+2. ~~**本地 embedding/reranker 分数饱和**~~ → ⚠️ **已于 §6.6 修复，本条结论作废**：
+   根因是镜像烘的英文模型（`bge-small-en-v1.5` + `ms-marco-MiniLM-L-6-v2`）在中文库上失效。
+   换多语言模型并重嵌入后，不相关 query 自然弃权（63 条 → 0 条），**基于分数的弃权现已开箱可用**。
+   保留本条作为「修复前的病态表现」记录；当前有效结论见 §6.6。
+3. **BM25 中文臂返回 0**：`bm25` 对 world/experience/observation 三组全返回 0 条，实际检索只靠 `semantic + graph`。
+   ⚠️ **已于 §6.4 定位为「本部署无解」并决策弃用**（内嵌 pg0 无 CJK 分词扩展）——见 `CONCEPTS.md` §6。本条保留为原始实测记录。
+4. **`final` 分不是 0–1 区间**（实测 ≈1.09），`reranker` 虽 0–1 但饱和。
 5. **`GET /memories/{id}` 不返回 `proof_count`**（实测为 `null`）；观察的「被多少来源支撑」目前只能从 `source_memory_ids` 长度推。（0.10.1 是否补需再验。）
 6. **版本差**：运行 0.10.0 < 参考 0.10.1。本文行为以实测 0.10.0 为准。
 
