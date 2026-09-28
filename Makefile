@@ -18,6 +18,7 @@
 
 SHELL := /bin/bash
 DSH_HOME ?= $(CURDIR)/.dsh
+export DSH_HOME
 PORT ?= 3080
 DSH ?= npx -y @deepseek-ai/dsh@0.1.7-rc.2
 
@@ -32,7 +33,7 @@ dev: install-profile
 install-profile:
 	mkdir -p $(DSH_HOME)/profiles/lepimemory
 	cp -Rf dsh/profiles/lepimemory/. $(DSH_HOME)/profiles/lepimemory/
-	DSH_HOME=$(DSH_HOME) $(DSH) plugin --profile lepimemory install
+	$(DSH) plugin --profile lepimemory install
 
 ## stop: 停掉 Hindsight（保留数据）
 stop:
