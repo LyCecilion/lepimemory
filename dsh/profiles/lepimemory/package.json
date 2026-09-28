@@ -1,0 +1,16 @@
+{
+    "name": "dsh-profile-lepimemory",
+    "private": true,
+    "dependencies": {
+        "@dsh-external/dsh-lepimemory-state": "link:../../../dsh/plugins/dsh-lepimemory-state"
+    },
+    "dsh": {
+        "profile": {
+            "bundles": [
+                "@deepseek-ai/dsh-base",
+                "@deepseek-ai/dsh-web-app",
+                "@dsh-external/dsh-lepimemory-state"
+            ]
+        }
+    }
+}

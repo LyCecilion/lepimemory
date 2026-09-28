@@ -1,0 +1,23 @@
+{
+    "name": "@dsh-external/dsh-lepimemory-state",
+    "version": "0.0.1",
+    "private": true,
+    "description": "Lepimemory 最小状态注入插件（Phase 1 实验）：把一个硬编码的状态文本注册为 system prompt section。",
+    "type": "module",
+    "main": "./lib/index.js",
+    "exports": {
+        ".": {
+            "default": "./lib/index.js"
+        }
+    },
+    "files": [
+        "lib",
+        "cordis.patch.yml"
+    ],
+    "dsh": {
+        "manifestVersion": 1,
+        "bundle": {
+            "patch": "./cordis.patch.yml"
+        }
+    }
+}

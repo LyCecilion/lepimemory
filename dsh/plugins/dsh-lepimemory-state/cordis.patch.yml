@@ -1,0 +1,7 @@
+# dsh-lepimemory-state bundle 层：插入状态注入行。
+# 行内 config.state 是默认状态文本；profile 补丁 / --patch 叠加可覆盖它（整行替换 config）。
+- insert:
+    - id: lepimemory-state
+      name: "@dsh-external/dsh-lepimemory-state"
+      config:
+        state: "（默认）状态未配置。"

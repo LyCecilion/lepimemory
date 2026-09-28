@@ -1,0 +1,92 @@
+# Lepimemory profile patch — 草案 v0.1（2026-09-28，待评审）
+# ============================================================
+# 这是 profile 的「用户补丁层」，在 bundle 层之后生效。
+# 机制细节与调研证据见 docs/research/dsh-findings.md。
+# 本草案做两件事：
+#   1) 模型接入：追加一个 .env 引 key 的自定义模型端点；
+#   2) 能力面裁剪：声明 lepimemory 专用 agent preset（不含编码向工具），
+#      并把 agent preset registry 的默认指向它。
+#
+# 机制备忘（来自 0.1.7-rc.2 上游实现）：
+#   - 对已存在行的补丁会「整行替换 config」——每条 config 需重述全部键；
+#   - 新增行用 `- insert: [...]`；
+#   - Web 面下，会话实际的能力/提示词面由 agent preset 的 plugins 列表决定
+#     （bundle 已把编码向各行从 host 面挪到 preset 面），所以裁剪落在 preset 上。
+
+# ── 1) 模型接入：自定义端点（.env 引 key 与 baseURL）──────────────
+# 与 web profile 中验证过的写法一致；模型清单按需增删。
+# baseURL 经 !!js 从环境读取（user patch 层官方支持 process.env 引用，
+# 见 packages/boot/app-boot/src/index.ts 的 userPatchesSchema 注释），
+# 端点地址不进仓库；LEPI_LLM_BASE_URL / GEEK_TECH_CLUB_API_KEY 见 .env.example。
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      geek-tech-club:
+        displayName: 极创工作室招新
+        apiKeyEnv: GEEK_TECH_CLUB_API_KEY
+        api: openai-completions
+        baseURL: !!js "process.env.LEPI_LLM_BASE_URL || 'https://api.deepseek.com/v1'"
+        models:
+          - id: deepseek-flash
+            name: deepseek-flash
+          - id: deepseek-v4-pro
+            name: deepseek-v4-pro
+          - id: kimi-k2.6
+            name: kimi-k2.6
+          - id: glm-5.3
+            name: glm-5.3
+
+# 评委场景建议（待定）：把默认模型切到 .env 端点——评审机只需配一个 key。
+# 本地开发若想继续用官方账号（deepseek-official），保持注释即可。
+# - id: agent-default-model
+#   name: '@deepseek-ai/dsh-agent-default-model'
+#   config:
+#     provider: geek-tech-club
+#     model: deepseek-flash
+
+# ── 2) 能力面裁剪：lepimemory 专用 agent preset ──────────────────
+# 说明：
+#   - 编码向能力（fs / 终端 / skills / 计划 / 待办 / 子代理等）一律不挂；
+#   - 「行动」工具留给自研插件（显式、可审计），不放开通用 shell；
+#   - 压缩（compaction）先禁用：避免把注入的记忆内容摘要掉（Phase 1 预判坑，
+#     接管方案见 CONCEPTS Phase 2「上下文管理策略」）。
+- insert:
+    - id: preset-lepimemory
+      name: "@deepseek-ai/dsh-agent-preset"
+      config:
+        id: lepimemory
+        name: Lepimemory 角色
+        description: "面向 Lepimemory 的角色会话：无编码向工具；人设/记忆由自研插件接管。"
+        plugins:
+          - id: persona
+            name: "@deepseek-ai/dsh-persona"
+            config:
+              # 占位：遮蔽部署级 “coding agent” 人设；正式文本由自研插件 Phase 1 接管。
+              prefix: "占位：你是 Lepimemory 的角色运行时（正式人设待注入）。"
+              suffix: "" # 空 = 遮蔽全局后缀（不显示 working directory 等）
+              # complete / includeRuntimeContext 待 Phase 1 定，暂不设置。
+          - id: tool-ask-user
+            name: "@deepseek-ai/dsh-tool-ask-user"
+          - id: tool-web
+            name: "@deepseek-ai/dsh-tool-web"
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: compaction-basic
+            name: "@deepseek-ai/dsh-compaction-basic"
+            disabled: true # 先禁用（见上）；接管或替换后启用
+          # 行动工具（自研）后续挂在这里或由插件注册，见 docs/research/dsh-findings.md §6。
+
+# ── 3) 默认 preset：会话创建时默认用 lepimemory ──────────────────
+- id: agent-preset-registry
+  name: "@deepseek-ai/dsh-agent-preset-registry"
+  config:
+    default: lepimemory
+
+# ── 4) 状态注入实验（Phase 1 C）──────────────────────────────────
+# 由自研插件 @dsh-external/dsh-lepimemory-state 注册的 section 提供；
+# 这里覆盖它的默认状态文本。Phase 2 起由状态机动态提供。
+- id: lepimemory-state
+  config:
+    state: "（占位）状态注入实验：正式状态将由 Phase 2 状态机提供。"
