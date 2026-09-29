@@ -44,6 +44,7 @@
     - **读侧**：`session-persistence` 按**仓库内生成的静态白名单** `KNOWN_SESSION_EVENT_TYPES`（`core/session/src/known-event-types.ts`）准入；不在表内且**无 `ignorable: true`** 的事件 → **整条日志被拒绝解读**（`session-persistence/src/storage-contract.ts`）。
     - **写侧**：`Session.append(type, data)` **没有 `ignorable` 透传入口**（`core/session/src/index.ts:722`）。官方插件实践直言：**不要用新事件类型 append**，改用「从既有事件派生」或「插件自有存储」（`preset/agent-preset/skills/cordis-plugin-development/references/practices.md`）。
     - **实测**：在 `agent/turn-stopping` 里 `agent.session.append('persona/state-diff', {...})` → 追加**成功**（日志出现 seq=64、**无 `ignorable`**）；重启进程重开会话 → `Failed to load history: … contains event type "persona/state-diff" (seq 64) unknown to this harness and not marked ignorable; refusing to interpret the log`（**整个会话不可加载**）。
+    - **写路径穷举（2026-09-29 补测）**：冷路径 `ctx.sessionPersistence.open(id,'write')` 的 `SessionHandle.append(events)` 虽接受完整事件（含 `ignorable`），但 seam **单写者**、活会话写句柄已被 agent-loop 持有 → 探针实测 `SessionAlreadyOwnedError: … already owned by an active write handle`。故**无任何受支持的活写路径**。
     - **结论**：CONCEPTS §5.3 原计划「合并 `SessionEventMap` 追加 `memory/recall` / `persona/state-diff` / `decision/attribution`」在本版本**对 out-of-tree 插件不可行**；审计须落**插件自有持久化**，或从既有事件派生——而「已落 `system/message` 的提示词变更」本身就是「效果」的可回放证据（Trajectory 的 Prompt Diff 即此）。
 
 ## 3. 注意事项与坑
@@ -134,3 +135,4 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - 2026-09-29 v0.6：复核补 §2.9–2.11（`section.text` 函数形式 / `ctx.logger` / `DSH_HOME` 解析语义）与 headless 测试台构成，供 Phase 3 状态持久化实现。
 - 2026-09-29 v0.7：补 §2.12 日志可见性踩坑（stock bundle 无 console exporter）；Phase 3 第一步（状态持久化）已实现并验收，见 `artifacts/state-persistence.md`。
 - 2026-09-29 v0.8：补 §2.13–2.14（会话事件订阅 + 每轮收尾钩子；**out-of-tree 不能追加新事件类型**，实测重载拒绝）。据此改写 `CONCEPTS.md §5.3` 审计落点。
+- 2026-09-29 v0.9：§2.14 补「写路径穷举」——冷路径 `ctx.sessionPersistence.open(id,'write')` 亦被单写者拒绝（探针实测 `SessionAlreadyOwnedError`），坐实「**无受支持活写路径**」。

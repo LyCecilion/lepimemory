@@ -46,6 +46,25 @@ newer harness (raw log: …/session.v4.jsonl.zstd) (gateway/internal)
 - 官方插件实践：`preset/agent-preset/skills/cordis-plugin-development/references/practices.md` ——「**不要用新事件类型 append**；改用从既有事件派生或插件自有存储」。
 - 设计记录：`.agents/notes/implemented/architecture/2026-08-30-retain-ignorable-external-session-events.md`。
 
+## 写路径定论（穷举，2026-09-29）
+
+| 路径 | 能写 `ignorable: true`？ | 结论 |
+| --- | --- | --- |
+| **热路径**：`agent.session.append(type, data[, surfaceOpts])` | ❌ 无该参数（`core/session/src/index.ts:722`） | 写出的外部事件无标记 → 重载整档拒绝（上文实测） |
+| **冷路径**：`ctx.sessionPersistence.open(id,'write')` → `SessionHandle.append(events)` | ✅ 接受完整事件（含 `ignorable`，`session-persistence/src/handle.ts`） | **但拿不到写句柄**：seam 单写者，活会话的写句柄已被 agent-loop 持有 |
+| **官方插件规范** | — | 明令「**不要用新事件类型 append**」（`…/cordis-plugin-development/references/practices.md`） |
+
+**冷路径探针实测**（`/tmp` bench，临时探针，做完即撤）：
+
+```
+sessionPersistence present: true
+open(id,'write') FAILED: SessionAlreadyOwnedError: session "session-…" is already owned by an active write handle
+```
+
+→ **定死**：本版本外挂插件**没有任何受支持的活写路径**能把 `ignorable: true` 写进信封；新增会话事件类型 = 破坏重载。
+
+---
+
 ## 影响 / 决策
 
 - `CONCEPTS.md §5.3` 已改写为**分层落点**：
