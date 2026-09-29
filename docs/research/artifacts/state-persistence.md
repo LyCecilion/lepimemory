@@ -38,7 +38,10 @@ cat /tmp/lep-smoke/lepimemory/state.json
 }
 ```
 
-启动日志：`lepimemory-state: 已写入初始状态：/tmp/lep-smoke/lepimemory/state.json`（经 `ctx.logger.info`）。
+**日志（说明，非实测输出）**：插件在 apply 里经 `ctx.logger('lepimemory-state').info` 发出
+`lepimemory-state: 已写入初始状态：/tmp/lep-smoke/lepimemory/state.json`；
+但 **stock app 未挂 console exporter → stdout 看不到**（与 §5 同因）。上面 boot 输出确实只有
+`all_proxy` 警告 + token 行——该 logger 行**未被观测到**，此处只记「代码会发」，不当作「实测打出」。
 
 ---
 
