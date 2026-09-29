@@ -12,10 +12,17 @@
 
 ## 1. 首次启动自动写入（不需要模型）
 
-**命令**：全新 home，等价于 `make dev DSH_HOME=/tmp/lep-smoke DSH=dsh PORT=3099` 的 dsh 段。
+**命令**：全新 home + **真启动** dsh（`--dump-config` 只组合、不 mount，验不了这条）。
+
+> ⚠️ **link 坑（实测踩到）**：仓库版 profile 用相对 `link:../../../dsh/plugins/…`，**只在
+> `DSH_HOME=<repo>/.dsh` 时**才三跳到 `<repo>/dsh/plugins`；换成外部 home（如 `/tmp/lep-smoke`）
+> 会指向不存在的 `/tmp/dsh/plugins/…`——`dsh plugin install` 报 `cannot resolve profile bundle`，
+> 运行期 cordis 对解析不到的模块**只走 logger、不崩** → 插件静默缺席、不写 `state.json`。
+> 故外部 home **必须用绝对 link**：本例直接拷**常驻 profile**（`~/.dsh/profiles/lepimemory`，
+> 其依赖是绝对 `link:<repo>/dsh/plugins/…`），**不是** `make dev DSH_HOME=/tmp/…`（那条会踩坑）。
 
 ```bash
-cp <resident>/profiles/lepimemory → /tmp/lep-smoke/profiles/lepimemory   # 绝对 link 的插件依赖
+cp <resident>/profiles/lepimemory → /tmp/lep-smoke/profiles/lepimemory   # 拷常驻版（绝对 link，才解析得到）
 DSH_HOME=/tmp/lep-smoke dsh plugin --profile lepimemory install
 DSH_HOME=/tmp/lep-smoke dsh --profile lepimemory --no-open --port 3099   # 起来后 Ctrl-C
 cat /tmp/lep-smoke/lepimemory/state.json
