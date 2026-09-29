@@ -394,7 +394,7 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 - [ ] dsh profile 定义（模型接入 + 按 row id 裁剪编码向工具）
 - [ ] 最小 Host 插件包（可加载、可看到效果）
 - [ ] Hindsight 跑起来（单机），bank 建好，`retain_mission` 配好
-- [ ] 竖切：一次交互 → 写入判断 → `retain` → 下轮 `recall` → 归因 → 自研审计（插件自有持久化）
+- [x] 竖切（读路径）：一次交互 → `recall` → 归因筛选 → 注入（`form:'recall'`）→ 自研审计（写路径 `retain` 待接）
 - [ ] 最小审计面板：能看到「这句话被哪条记忆驱动」
 
 ### Phase 2 — Lv1 完整

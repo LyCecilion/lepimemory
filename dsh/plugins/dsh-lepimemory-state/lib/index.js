@@ -23,6 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { advance } from "./machine.js";
+import { installMemory } from "./memory.js";
 import {
     defaultStateFile,
     expandHome,
@@ -156,4 +157,7 @@ export function apply(ctx, config) {
             noteFailure(`lepimemory-state: 事件处理失败：${err.message}`);
         }
     });
+
+    // ── 记忆桥：每轮按用户输入召回长期记忆、归因后注入（失败则降级无记忆）──────
+    installMemory(ctx, config, { logger, stateFile: file });
 }

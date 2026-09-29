@@ -76,7 +76,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步（2026-09-29 下午）**：① 记忆召回竖切（Hindsight `recall` → 归因筛选 → 注入，含 429 退避）；② 规则集与量级标定（让状态几轮内可见地改变语气）；③ `docs/DEMO.md` 剧本 + 状态面板
+- ⏭️ **下一步**：① 记忆**写路径**（`retain` 三层判断：不写 / experience / fact）＋ 冲突 supersede；② 规则集与量级标定；③ `docs/DEMO.md` 剧本 + 状态面板
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
@@ -91,6 +91,8 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - ✅ **正式人设注入**（2026-09-29）：preset `persona` 行换正式文本（身份内核 / 说话方式 / 边界），
   经 persona 包注册为 agent 作用域 prefix（suffix 空=遮蔽全局后缀）。实机 A/B：不再自称 AI，也无「工作目录 / 跑命令」泄漏。
   证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
+- ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)` → 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
+  实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
@@ -403,7 +405,8 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 | 情绪的极性冲突（又亲近又防备） | 单标量做不到，需「维度 + 矛盾标记」 | `DESIGN_NOTES.md` §1.7 |
 | 各层上下文的 token 预算 | 需实测 | `DESIGN_NOTES.md` §3.4 |
 | preset 裁剪是配置层还是运行时 | dump 树与 session log 证据矛盾，需再核验写死 | 本文件「Agent 复核」待办 1 |
-| 429 退避策略 | 演示用自有 key 风险低；Phase 3 插件仍需带退避 + 降级 | 本文件「Agent 复核」待办 2 |
+| 429 退避策略 | ✅ recall 路径已实现：指数退避（1s/2s/4s）+ 降级 + 审计（`lib/hindsight.js`） | 本文件「Agent 复核」待办 2 |
+| 模型可能用 `tool-web.fetch` 直连 Hindsight、**绕过归因** | 已知风险，待评估收紧 `tool-web` fetch | `docs/research/artifacts/memory-recall.md` 备注 2 |
 | 提交安排（排练提交 6054b74 处置 / 提交粒度 / push 时机） | 待确认 | 本文件「Git 状态备忘」 |
 
 ---

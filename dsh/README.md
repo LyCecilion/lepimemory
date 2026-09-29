@@ -45,5 +45,6 @@ systemctl --user restart lepimemory-dsh
   经 persona 包注册为 agent 作用域的 persona prefix/suffix（`suffix: ''` = 遮蔽全局后缀，不显示工作目录等）。
   A/B 实测：不再自称 AI/助手，也不再冒「工作目录/跑命令」的编码助手口吻（证据 `docs/research/artifacts/persona-injection.md`）。
   文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
-- **待办（Phase 3 后续）**：规则集设计与量级实测；记忆召回竖切（接 Hindsight，含限流退避）。
+- **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace)`）→ **归因筛选**（分数阈值 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
+- **待办（Phase 3 后续）**：记忆**写路径**（`retain` 三层判断）；规则集设计与量级实测；`docs/DEMO.md` 剧本 + 状态面板。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

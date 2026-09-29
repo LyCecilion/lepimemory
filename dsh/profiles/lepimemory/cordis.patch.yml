@@ -103,4 +103,15 @@
 
 # 注：状态行的 config 由插件包的 bundle 层提供（stateFile），本 profile **不再覆盖**。
 # 若在此残留 state: / 不完整 config，会「整行替换」掉 bundle 层的 stateFile → 插件退回兜底路径。
+- id: lepimemory-state
+  config:
+    # 对既有行的补丁是「整行替换 config」→ 必须重述 stateFile，否则退回插件兜底。
+    stateFile: !!js dshHomePath('lepimemory/state.json')
+    memory:
+      enabled: true
+      # 记忆服务地址：默认本机 Hindsight；端点走 .env（不进仓库）。
+      baseUrl: !!js process.env.HINDSIGHT_API_URL || 'http://127.0.0.1:8888'
+      bank: lepimemory
+      minSemantic: 0.35
+      maxItems: 4
 
