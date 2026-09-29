@@ -2,7 +2,7 @@
     "name": "@dsh-external/dsh-lepimemory-state",
     "version": "0.0.1",
     "private": true,
-    "description": "Lepimemory 最小状态注入插件（Phase 1 实验）：把一个硬编码的状态文本注册为 system prompt section。",
+    "description": "Lepimemory 状态注入插件：读取一份持久化 JSON 状态（mood/relation/reasons），在每次 prompt 组装时实时渲染为 system prompt section。",
     "type": "module",
     "main": "./lib/index.js",
     "exports": {

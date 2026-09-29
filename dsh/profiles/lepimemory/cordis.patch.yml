@@ -84,9 +84,6 @@
   config:
     default: lepimemory
 
-# ── 4) 状态注入实验（Phase 1 C）──────────────────────────────────
-# 由自研插件 @dsh-external/dsh-lepimemory-state 注册的 section 提供；
-# 这里覆盖它的默认状态文本。Phase 2 起由状态机动态提供。
-- id: lepimemory-state
-  config:
-    state: "（占位）状态注入实验：正式状态将由 Phase 2 状态机提供。"
+# 注：状态行的 config 由插件包的 bundle 层提供（stateFile），本 profile **不再覆盖**。
+# 若在此残留 state: / 不完整 config，会「整行替换」掉 bundle 层的 stateFile → 插件退回兜底路径。
+

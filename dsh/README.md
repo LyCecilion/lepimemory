@@ -6,8 +6,8 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `profiles/lepimemory/` | 项目 profile：模型接入 + 能力面裁剪（agent preset）+ 状态覆盖 |
-| `plugins/dsh-lepimemory-state/` | 最小「状态注入」插件（Phase 1 实验）：注册一个 system prompt section |
+| `profiles/lepimemory/` | 项目 profile：模型接入 + 能力面裁剪（agent preset） |
+| `plugins/dsh-lepimemory-state/` | 状态注入插件：读一份**持久化 JSON 状态**（`mood` / `relation` / `reasons`），在每次 prompt 组装时实时渲染为 system prompt section |
 
 ## 安装 / 使用
 
@@ -31,5 +31,9 @@ systemctl --user restart lepimemory-dsh
 
 ## 现状与待办
 
-- 状态文本目前是**占位**（Phase 2 由状态机动态提供；section 机制不变）
+- **状态持久化（Phase 3 第一步）**：插件读 `<DSH_HOME>/lepimemory/state.json`（补丁层用
+  `!!js dshHomePath('lepimemory/state.json')` 解析；未配置时插件兜底 `$DSH_HOME`/`~/.dsh`）。
+  首次启动自动写入初始状态；每轮组装重读文件 → **手动编辑该文件即可改状态，无需重启**。
+  坏 JSON / 坏字段会报错（含字段路径），不静默回落、不改写坏文件；运行中改坏则记日志并沿用上次有效状态。
+- **待办**：状态**更新规则**（事件驱动状态机本体）、衰减、审计事件尚未实现（Phase 3 后续）。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

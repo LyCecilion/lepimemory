@@ -77,6 +77,10 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
 - ⏭️ **下一步**：竖切闭环（阶段 3，把 recall 接进 dsh）＋ 自研状态机（状态注入接到 `dsh-lepimemory-state` 的 section 上）
+- ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
+  插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
+  四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
+  证据：`docs/research/artifacts/state-persistence.md`；profile 的 `state:` 覆盖已删、常驻实例 `~/.dsh/profiles/lepimemory/` 已同步并重启。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
@@ -165,7 +169,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 
 > 相关 commit（`6b2ae9e` / `ad11b82` / `50caed2`）均已推送；本地与 `origin/main` 一致（`git rev-list --count origin/main..HEAD` = 0）。
 
-## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储
+## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储（✅ 已完成，见上方「当前进度」）
 
 > **分工（2026-09-29）**：本节的**实现、验收、提交由你本人执行**；Agent 已完成全部前置复核，「实现规格」与「验收配方」已按复核结果定稿。
 

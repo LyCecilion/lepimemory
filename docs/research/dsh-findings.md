@@ -38,6 +38,7 @@
 9. **section `text` 支持函数形式**：每次 prompt 组装都会调用 `section.text(context)`（`packages/core/system-prompt/src/index.ts:606`）——「每轮重读外部状态」的机制依据（2026-09-29 复核）。
 10. **插件日志通道**：cordis 标准 `ctx.logger`（`ctx.logger('<name>')` 取具名 logger）——插件报错/提示统一走它（2026-09-29 复核）。
 11. **`DSH_HOME` 解析语义**：`resolveDshHome()` = 显式配置 → `$DSH_HOME` → `~/.dsh`（`packages/util/home-paths`；含 `~` 展开与绝对化）——插件自持文件路径需与之一致（2026-09-29 复核）。
+12. **插件日志可见性（踩坑）**：`ctx.logger('<name>')` 是 cordis 标准通道，但 **stock bundle 未挂 console exporter**——运行时 `.warn/.error` **不会**出现在 `dsh web` 的 stdout（仅 app-boot 的 diagnostics exporter 收集启动期 warn/error，`warning: N entries did not activate` 即来自它）。→ 要「给人看的日志」需显式挂 logger 行，或改走 **durable 审计事件**（Phase 3 的 429 退避/降级提示应走后者）。
 
 ## 3. 注意事项与坑
 
@@ -125,3 +126,4 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - 2026-09-28 v0.4：`make dev` 全流程实测（含两处修复）；§3.7 更新（compose 已装）。
 - 2026-09-28 v0.5：脱敏与端点环境变量化——个人数据改合成示例；`LEPI_LLM_BASE_URL` 经 `!!js` 读取（非法表达式快速失败已实测）；工作区纪律见根 `HANDOFF.md`。
 - 2026-09-29 v0.6：复核补 §2.9–2.11（`section.text` 函数形式 / `ctx.logger` / `DSH_HOME` 解析语义）与 headless 测试台构成，供 Phase 3 状态持久化实现。
+- 2026-09-29 v0.7：补 §2.12 日志可见性踩坑（stock bundle 无 console exporter）；Phase 3 第一步（状态持久化）已实现并验收，见 `artifacts/state-persistence.md`。
