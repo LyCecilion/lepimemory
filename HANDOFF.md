@@ -250,6 +250,11 @@ reasons:   []                                                    —— [{ dimen
 **验收（照跑并留证到 `docs/research/artifacts/`）**：
 
 1. **首次启动自动写入**（不需要模型；必须**真启动**——`--dump-config` 只组合、不 mount，验不了这条）：全新 home `make dev DSH_HOME=/tmp/lep-smoke DSH=dsh PORT=3099` → 起来后 `cat /tmp/lep-smoke/lepimemory/state.json` 应为初始状态；Ctrl-C 退出。（web 无人对话 → 无模型调用，正好绕开新 home 没有 `.credentials.yaml`；docker 部分与这条无关，也可 `make install-profile DSH_HOME=…` + 裸 `dsh --profile lepimemory --no-open --port 3099`。）
+   ⚠️ **全新 home 的 link 坑（2026-09-29 实测踩到）**：仓库版 `dsh/profiles/lepimemory/package.json` 用的是
+   相对 `link:../../../dsh/plugins/…`，只有在 `DSH_HOME=<repo>/.dsh` 时三跳才落到 `<repo>/dsh/plugins`；
+   换成 `/tmp/lep-smoke` 等外部 home 会指向不存在的 `/tmp/dsh/plugins/…`。且 cordis 对解析不到的模块
+   **只走 logger、不崩** → 插件静默缺席、不写 `state.json`，看着像实现 bug，实为 link。
+   正确做法：外部 home 用**绝对** `link:<repo>/dsh/plugins/dsh-lepimemory-state`（本步验收即拷常驻 profile 的绝对 link 版本）。
 2. **A/B 语气变化（两类证据分开写）**：
    - ① **状态文件 → 语气**：先写好 `/tmp/leptest/state-a.json`、`state-b.json`（明显对比：如 `valence ±0.6`、`trust 0.9 vs 0.1`），再 `dsh --profile lepimemory-headless --patch <A.yml> "今天过得怎么样？随便聊两句吧。"` / `--patch <B.yml>`——A/B patch 只把该行 `stateFile` 指向对应 /tmp 文件。**全程隔离，不碰 `~/.dsh` 本体**（它是常驻实例的家）。
    - ② **无需重启（直证、加分/演示项）**：`make dev` 起的 web，**同一会话**两轮之间编辑上面的 state 文件 → 下一轮语气变。headless 每次新进程，只证①；别拿它当②。
