@@ -85,6 +85,9 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   写侧 `Session.append()` 无 `ignorable` 透传，读侧按静态白名单准入，追加即让**整个会话重载被拒**。
   `CONCEPTS.md §5.3` 已改为「分层落点」：**效果**靠 `system/message` 的 Prompt Diff（可回放），**原因**落**插件自有持久化**。
   详见 `docs/research/dsh-findings.md` §2.13–2.14。
+- ✅ **状态机 v1 完成**（2026-09-29）：订阅 `session/event`，`turn/end` 收尾时按**数据化规则**推进状态
+  （`lib/machine.js`）+ 心境 6h 半衰期衰减，写 `state.json` 并追加 `audit.jsonl`（前值→后值 + 命中规则）。
+  证据 `docs/research/artifacts/state-machine.md`。**待办**：规则集扩充与量级实测（单轮增量低于渲染阈值）。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 

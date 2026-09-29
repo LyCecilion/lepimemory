@@ -7,7 +7,7 @@
 | 路径 | 说明 |
 | --- | --- |
 | `profiles/lepimemory/` | 项目 profile：模型接入 + 能力面裁剪（agent preset） |
-| `plugins/dsh-lepimemory-state/` | 状态注入插件：读一份**持久化 JSON 状态**（`mood` / `relation` / `reasons`），在每次 prompt 组装时实时渲染为 system prompt section |
+| `plugins/dsh-lepimemory-state/` | 角色状态插件：持久化 JSON 状态（`state.json`）+ 事件驱动状态机 + 心境衰减 + 自有审计（`audit.jsonl`），每轮渲染为 system prompt section |
 
 ## 安装 / 使用
 
@@ -35,5 +35,11 @@ systemctl --user restart lepimemory-dsh
   `!!js dshHomePath('lepimemory/state.json')` 解析；未配置时插件兜底 `$DSH_HOME`/`~/.dsh`）。
   首次启动自动写入初始状态；每轮组装重读文件 → **手动编辑该文件即可改状态，无需重启**。
   坏 JSON / 坏字段会报错（含字段路径），不静默回落、不改写坏文件；运行中改坏则记日志并沿用上次有效状态。
-- **待办**：状态**更新规则**（事件驱动状态机本体）、衰减、审计事件尚未实现（Phase 3 后续）。
+- **状态机 v1（事件驱动 + 衰减 + 自有审计）**：插件订阅 `session/event`，在 `turn/end` 收尾时推进状态——
+  - 规则是**显式数据**（`lib/machine.js` 的 `RULES`，纯函数 `(facts) => deltas`）；v1 只含 2 条机制验证规则（用户说话→熟悉度 +0.02；工具失败→心境 −0.08、信任 −0.02）；
+  - **心境按 6h 半衰期向基线回归**，关系不衰减；
+  - 每次变更写 `state.json` + 追加 `audit.jsonl`（`{时刻, 轮次, 命中规则, 维度前→后}`，人可读）。
+  - ⚠️ **不往 session log 加自定义事件**（out-of-tree 会破坏会话重载，见 `docs/research/artifacts/session-event-spike.md`）——
+    「效果」靠已落的 `system/message` Prompt Diff，「原因」靠自有 `audit.jsonl`（`CONCEPTS.md §5.3`）。
+- **待办（Phase 3 后续）**：规则集设计与量级实测；正式人设注入（替换 persona 占位）；记忆召回竖切（接 Hindsight，含限流退避）。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）
