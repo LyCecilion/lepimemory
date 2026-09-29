@@ -34,6 +34,20 @@ function userTextOf(messages) {
         .trim();
 }
 
+/**
+ * 写路径的层①「是否值得写」判断（v1.1：不只按长度）。
+ * 返回跳过理由，或 null 表示可写。
+ * ⚠️ 只用**疑问/请求**做排除（保守）：陈述句里偶带「？」的少见，宁可漏写一条也不写脏。
+ */
+export function writeSkipReason(content, minChars) {
+    if (content.length < minChars) return "过短（视为寒暄/噪声）";
+    if (/[?？]/.test(content)) return "疑问句（不写入长期记忆）";
+    if (/^(提醒我|帮我|告诉我|查一下|说一下|讲一下|找一下|看看|问一下)/.test(content)) return "请求句（不写入长期记忆）";
+    if (/(吗|呢|吧)\s*[。.!！~～]?\s*$/.test(content)) return "征询/疑问句（不写入长期记忆）";
+    if (/^(嗯+|哦+|好的?|收到|在吗|谢谢|多谢|哈哈+|嗨+|你好|在么)\s*[。.!！~～]?\s*$/.test(content)) return "寒暄";
+    return null;
+}
+
 /** 追加一行 JSON 审计（best-effort）。 */
 function appendAudit(file, entry, logger) {
     try {
@@ -73,6 +87,8 @@ export function installMemory(ctx, config, { logger, stateFile }) {
     const injectedTurns = new Map();
     /** sessionId -> 本轮用户说过的话（写路径缓冲）。 */
     const turnUserText = new Map();
+    /** 最近写入过的内容（归一化），用于去重（避免重复 retain）。 */
+    const recentRetained = new Set();
 
     // ── 读路径：pre-step 召回 → 归因 → 注入 ─────────────────────────────
     ctx.on(
@@ -145,14 +161,26 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             if (!texts || texts.length === 0) return;
 
             const content = texts.join("\n").trim();
-            // ① 过短/寒暄 → 不写
-            if (content.length < retainMinChars) {
+            // ① 写入判断（长度 / 疑问 / 请求 / 寒暄）→ 不写
+            const skipReason = writeSkipReason(content, retainMinChars);
+            if (skipReason) {
                 appendAudit(retainAudit, {
                     type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                    skipped: true, reason: "过短（视为寒暄/噪声）", chars: content.length,
+                    skipped: true, reason: skipReason, chars: content.length, content,
                 }, logger);
                 return;
             }
+            // 去重：同内容不重复写（Hindsight 侧另有 consolidate，但源头先去重）
+            const key = content.replace(/\s+/g, "");
+            if (recentRetained.has(key)) {
+                appendAudit(retainAudit, {
+                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                    skipped: true, reason: "重复内容（去重）", content,
+                }, logger);
+                return;
+            }
+            recentRetained.add(key);
+            if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
             // ② 交 Hindsight concise 抽取；③ 信任等级以 tags 标注。fire-and-forget（后台，不在乎延迟，给足预算）。
             const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
             client

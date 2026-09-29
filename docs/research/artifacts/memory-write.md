@@ -10,12 +10,18 @@
 
 | 层 | 判定 | 落点 |
 | --- | --- | --- |
-| ① 不写 | 文本过短（默认 < 6 字，视为寒暄/噪声） | 审计记 `skipped` |
+| ① 不写 | 过短 / **疑问句**（含 `？`）/ **请求句**（`提醒我…`）/ 寒暄 | 审计记 `skipped` + `reason` |
 | ② experience | **待接**（本步未做；角色暂无「行动/工具结果」类经历） | — |
 | ③ fact / preference | 其余**用户陈述** → `retain`（Hindsight `concise` 负责过滤填充语、抽成事实） | `trust:fact` 标签 |
 
 - `tags: ["origin:user-turn", "trust:fact"]` 标来源与信任等级（CONCEPTS §4.2 的「事实/推断/经历」先落 fact 档）。
+- **去重**：同一内容（归一化）不重复 `retain`。
 - **冲突/过期**：走 Hindsight 原生 **observation refine-not-overwrite / supersede**，我们不做特殊处理。
+
+> ⚠️ **v1.1 修复（实测复现的过度写入）**：初版层①**只按长度**过滤 → 把用户的**提问**也写进了记忆
+> （`{"turn":2,"ok":true,"content":"我下周要见谁来着？提醒我一下。"}`），Hindsight 随即抽出近重复事实 →
+> turn2 的 recall **候选 8 条、picked 4 条近重复**。
+> 已修：层①加「疑问/请求句排除」（`writeSkipReason`，纯函数，10/10 用例过）+ 源头内容去重。
 
 ## 健壮性
 
