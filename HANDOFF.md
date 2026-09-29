@@ -27,6 +27,7 @@
 | `CHALLENGE.md` | 题目原文 | 不可改 |
 | `CONCEPTS.md` | **已定的架构决策**。改动需明确推翻。 | 高 |
 | `DESIGN_NOTES.md` | **正在形成的判断**，含「未解」与「待验证」 | 中 |
+| `docs/DEVLOG.md` | **开发日志**：工作全过程 + 踩坑台账 + 已知未决 | — |
 | `HANDOFF.md` | 本文件 — 恢复上下文用 | — |
 
 **改动纪律**：如果开工后发现某个假设被推翻，改 `CONCEPTS.md`，**不要硬撑着实现**。
@@ -411,6 +412,9 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 | preset 裁剪是配置层还是运行时 | dump 树与 session log 证据矛盾，需再核验写死 | 本文件「Agent 复核」待办 1 |
 | 429 退避策略 | ✅ recall 路径已实现：指数退避（1s/2s/4s）+ 降级 + 审计（`lib/hindsight.js`） | 本文件「Agent 复核」待办 2 |
 | 模型可能用 `tool-web.fetch` 直连 Hindsight、**绕过归因** | 已知风险，待评估收紧 `tool-web` fetch | `docs/research/artifacts/memory-recall.md` 备注 2 |
+| **遗忘**确认匹配过宽 / 请求匹配过宽（`嗯…对了`、`永远不会忘记你` 会被误判） | **未修**，演示前必处理 | `docs/DEVLOG.md` §3 A/B |
+| 遗忘子集不可选（confirm 全量执行 `pending.ids`） | **未修** | `docs/DEVLOG.md` §3 C |
+| 行动工具**可见性未验**（host 注册是否进 preset 会话工具面） | **未修**，做行动工具前先验 | `docs/DEVLOG.md` §3 D |
 | 提交安排（排练提交 6054b74 处置 / 提交粒度 / push 时机） | 待确认 | 本文件「Git 状态备忘」 |
 
 ---

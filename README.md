@@ -39,4 +39,5 @@ make dev                 # 起 Hindsight + dsh；首次启动需拉多语言模�
 - `CONCEPTS.md` — 已定的架构决策
 - `DESIGN_NOTES.md` — 正在形成的判断（含未解项）
 - `HANDOFF.md` — 推进计划与上下文交接
+- `docs/DEVLOG.md` — 开发日志（工作全过程 + 踩坑台账）
 - `CHALLENGE.md` — 题目原文
