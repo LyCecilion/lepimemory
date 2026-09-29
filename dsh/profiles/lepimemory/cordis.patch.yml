@@ -101,11 +101,10 @@
   config:
     default: lepimemory
 
-# 注：状态行的 config 由插件包的 bundle 层提供（stateFile），本 profile **不再覆盖**。
-# 若在此残留 state: / 不完整 config，会「整行替换」掉 bundle 层的 stateFile → 插件退回兜底路径。
+# 本 profile 覆盖状态行 config：对既有行的补丁是「整行替换 config」，
+# 所以这里必须**重述 stateFile**（否则插件退回兜底路径），再叠加 memory 配置。
 - id: lepimemory-state
   config:
-    # 对既有行的补丁是「整行替换 config」→ 必须重述 stateFile，否则退回插件兜底。
     stateFile: !!js dshHomePath('lepimemory/state.json')
     memory:
       enabled: true

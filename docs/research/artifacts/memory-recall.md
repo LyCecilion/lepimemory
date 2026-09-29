@@ -14,6 +14,8 @@
   —— 运行时只校验 `role/source/content`，不需要 import dsh 包。
 - `ContextForm 'recall'` = 「从别处取回的材料」（`packages/llm/llm/src/message.ts`），语义天然吻合。
 - ⚠️ 不用 `agent.inject()`：那是「无唤醒的下一界推送」，可能错过本轮；只适合与输入无关的后台通知。
+- **自定义 `source.kind` 是官方机制**：`MessageSourceMap` 可合并扩展，仓内 `session-reference` 即自declared `kind:'session-reference', form:'recall'`；读路径只校验**事件类型**（`validateStoredEvents`），`source.kind` 位于 `user/message.data` 内、未知 kind 按**不透明**保留 → **不影响重载**。（注意：`kind:'plugin'` **并非** `MessageSourceMap` 的声明成员——它只出现在测试 fixture 与一条 legacy 重写里，故不采用。）
+- **pre-step 每步都触发**（一次工具调用＝多步）：用「仅当本轮**真·用户输入非空** + 每 turn 至多一次（`injectedTurns`）」去重，等价于只在 `step===1` 注入，不会在工具续步里重复注入、污染上下文。
 
 ## 归因筛选（最笨版本，先不调优）
 
@@ -52,12 +54,16 @@ user/message seq 10 source.kind=lepimemory-recall  form=recall
  "excluded":[{"id":"...","reason":"低相关（semantic 低于阈值）"}],"ms":180}
 ```
 
-**降级（记忆服务不可达）**：注入消息**缺位**（user/messages 仅 `user` + `runtime-context`），审计 `{"degraded":true,"error":"fetch failed"}`。
+**降级（记忆服务不可达）** —— web `lepimemory` profile 实测：注入消息**缺位**（该会话 user/messages 仅 `user` + `runtime-context`），审计 `{"type":"recall",...,"degraded":true,"error":"fetch failed"}`。
+
+> ⚠️ **早前矛盾已查清**：在 headless 跑降级时曾出现「`recall.jsonl` 记了 `degraded`，回复却仍提记忆」的现象。
+> 根因：headless 的默认编码 preset **没被换掉**（`--patch` 的 `agent-preset-registry` 在该 profile 里不存在 → `patch: entry "agent-preset-registry" not found`），模型**自己用 `bash`+`curl` 直连了 `http://127.0.0.1:8888/...`**（会话 `tool/call` 里可见），**绕过**了我们的注入——不是我们注入了。
+> 故 **headless 的 happy/degraded 两条都不作为证据**；证据以 **web `lepimemory` profile** + **结构性判据**（`user/message.source.kind` 有无 / `recall.jsonl` 的 picked/degraded）为准。
 
 ## 坑与备注
 
-1. **headless 环境不干净**：默认编向 preset 给了 `bash/read/grep`，模型会自己 `curl http://127.0.0.1:8888/...` 直接读 Hindsight，**绕过**我们的注入——
-   测试/演示请用**真正的 `lepimemory` profile（web，无编码工具）**，否则「模型提到记忆」未必是我们的功劳。
+1. **headless 环境不干净（实测确认）**：headless 的默认编码 preset **没被换掉**（`--patch` 的 `agent-preset-registry` 在 headless 不存在），host 面仍挂 `tool-bash`/`tool-fs` 等 → 模型会 `curl http://127.0.0.1:8888/...` 直连 Hindsight（甚至读仓库文件），**绕过**我们的注入。
+   → 测试/演示**只用真正的 `lepimemory` profile（web，编码工具已从 host 面挪走）**；且以**结构性判据**为准，「模型提到记忆」在 headless 里不算数。
 2. ⚠️ 由此也暴露一个**演示风险**：lepimemory preset 里 `tool-web` 的 `fetch` 开着，模型理论上也能自己去打 API 读记忆、绕过归因。
    → 若要杜绝，需评估收紧 web fetch；当前记为**已知未决**。
 3. 归因仍是**朴素版**（分数阈值）；「情绪门控召回排序」「候选集/排除理由进审计」已具备，调优留后续。
