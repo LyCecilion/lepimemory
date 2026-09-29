@@ -76,7 +76,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步**：① 真实行动工具 + 审批（含 experience 档 + 失败影响状态）；② 遗忘（计划预览→执行）；③ 规则集标定 + 状态面板（client 插件）
+- ⏭️ **下一步**：① 真实行动工具 + 审批（含 experience 档 + 失败影响状态）；② 规则集与量级标定；③ 状态面板（client 插件）
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
@@ -95,6 +95,8 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
 - ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
   实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**待续**：experience/推断档。
+- ✅ **遗忘 v1**（2026-09-29）：`agent/pre-step` 识别「忘掉 X」→ **计划预览**（notice）→ 用户普通消息确认 → `invalidate`（S1，可撤销）；只抑制**文本提到目标**的候选；审计 `forget.jsonl`；**不越过用户确认**。
+  实测：忘「团子」→ 计划列 1 条（排除误匹配的「香菜」）→ 确认 → 团子 0 命中、香菜未动。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具化 + 审批（子集可选）。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 

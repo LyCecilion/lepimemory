@@ -40,7 +40,7 @@ export class HindsightClient {
         this.deadlineMs = deadlineMs;
     }
 
-    async #post(path, body, { signal, deadlineMs, maxRetries } = {}) {
+    async #request(method, path, body, { signal, deadlineMs, maxRetries } = {}) {
         const url = `${this.baseUrl}/v1/default/banks/${encodeURIComponent(this.bank)}${path}`;
         const budget = deadlineMs ?? this.deadlineMs;
         const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(budget)]) : AbortSignal.timeout(budget);
@@ -50,7 +50,7 @@ export class HindsightClient {
             if (combined.aborted) break;
             try {
                 const res = await fetch(url, {
-                    method: "POST",
+                    method,
                     headers: { "content-type": "application/json" },
                     body: JSON.stringify(body),
                     signal: combined,
@@ -77,12 +77,22 @@ export class HindsightClient {
 
     /** 召回。返回原始响应 `{ results, trace, ... }`。 */
     async recall(query, { trace = true, signal, deadlineMs } = {}) {
-        return this.#post("/memories/recall", { query, trace }, { signal, deadlineMs });
+        return this.#request("POST", "/memories/recall", { query, trace }, { signal, deadlineMs });
     }
 
     /** 写入。⚠️ **非幂等**：默认**不重试**（网络错重试会造成重复记忆）。 */
     async retain(items, { signal, deadlineMs, maxRetries = 0 } = {}) {
-        return this.#post("/memories", { items }, { signal, deadlineMs, maxRetries });
+        return this.#request("POST", "/memories", { items }, { signal, deadlineMs, maxRetries });
+    }
+
+    /** 遗忘（S1 检索抑制）：`PATCH /memories/{id}` → `invalidated` 冷归档，可 `revert`。 */
+    async invalidate(memoryId, { reason = "用户要求忘记", signal, deadlineMs } = {}) {
+        return this.#request("PATCH", `/memories/${encodeURIComponent(memoryId)}`, { state: "invalidated", reason }, { signal, deadlineMs });
+    }
+
+    /** 撤销抑制：`PATCH /memories/{id}` → `valid`。 */
+    async revert(memoryId, { signal, deadlineMs } = {}) {
+        return this.#request("PATCH", `/memories/${encodeURIComponent(memoryId)}`, { state: "valid" }, { signal, deadlineMs });
     }
 }
 

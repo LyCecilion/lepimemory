@@ -408,7 +408,7 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 
 - [x] 记忆写路径 v1（不写/寒暄跳过 + 用户陈述→`retain` concise + `trust:fact` 标签；experience/推断待接）
 - [ ] 事实·推断·经历的信任等级与衰减策略
-- [ ] 冲突 supersede、遗忘（用户要求忘记的实际效果）
+- [x] 遗忘 v1（`忘掉 X` → 计划预览 → 普通消息确认 → `invalidate`，可撤销）；冲突 supersede 走 Hindsight 原生
 - [ ] 归因筛选（含排除理由）与自研归因审计（复用 `tool/result` + 自有持久化）
 - [ ] 行动能力：至少一类真实副作用操作 + 审批 + 失败影响状态
 - [ ] 审计与回放（双档：完整事件流 / 人可读归因）
