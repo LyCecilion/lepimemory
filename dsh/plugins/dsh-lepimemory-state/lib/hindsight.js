@@ -40,12 +40,13 @@ export class HindsightClient {
         this.deadlineMs = deadlineMs;
     }
 
-    async #post(path, body, { signal, deadlineMs } = {}) {
+    async #post(path, body, { signal, deadlineMs, maxRetries } = {}) {
         const url = `${this.baseUrl}/v1/default/banks/${encodeURIComponent(this.bank)}${path}`;
         const budget = deadlineMs ?? this.deadlineMs;
         const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(budget)]) : AbortSignal.timeout(budget);
+        const attempts = maxRetries ?? this.maxRetries;
         let lastError;
-        for (let attempt = 1; attempt <= this.maxRetries + 1; attempt += 1) {
+        for (let attempt = 1; attempt <= attempts + 1; attempt += 1) {
             if (combined.aborted) break;
             try {
                 const res = await fetch(url, {
@@ -63,7 +64,7 @@ export class HindsightClient {
                 if (err.fatal) throw err;
                 lastError = err;
             }
-            if (attempt <= this.maxRetries) {
+            if (attempt <= attempts) {
                 try {
                     await delay(this.backoffMs * 2 ** (attempt - 1), combined);
                 } catch {
@@ -79,9 +80,9 @@ export class HindsightClient {
         return this.#post("/memories/recall", { query, trace }, { signal, deadlineMs });
     }
 
-    /** 写入（保留给后续「写路径」）。 */
-    async retain(items, { signal, deadlineMs } = {}) {
-        return this.#post("/memories", { items }, { signal, deadlineMs });
+    /** 写入。⚠️ **非幂等**：默认**不重试**（网络错重试会造成重复记忆）。 */
+    async retain(items, { signal, deadlineMs, maxRetries = 0 } = {}) {
+        return this.#post("/memories", { items }, { signal, deadlineMs, maxRetries });
     }
 }
 

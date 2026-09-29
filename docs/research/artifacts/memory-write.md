@@ -20,6 +20,7 @@
 ## 健壮性
 
 - **fire-and-forget**：不阻塞对话；失败/退避耗尽 → 审计 `degraded`。
+- **retain 非幂等 → 不重试**（网络错重试会造成**重复记忆**）：`retain` 走 `maxRetries:0`；recall 才用退避重试（幂等读）。
 - **预算分开**：recall 是**前台的**（pre-step 里，`deadlineMs` 默认 3s，超时就降级无记忆）；retain 是**后台的**（`deadlineMs` 默认 **30s**）。
   - ⚠️ 初版误用 3s 预算跑 retain → LLM 抽取常 >3s → client 超时、审计假报 `degraded`（**服务端其实成功**）。已改为 retain 独立 30s 预算。
 

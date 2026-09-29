@@ -27,7 +27,7 @@
 - 客户端：总超时上限（`deadlineMs`，pre-step 里默认 3s）+ 429/5xx/网络错**指数退避**（1s/2s/4s，最多 3 次）。
 - **降级**：失败 → **无记忆回答**，写自有审计 `recall.jsonl`（`degraded:true`），绝不让演示当场 500。
 
-## 实机证据（web，lepimemory profile：仅 ask-user/web 工具）
+## 实机证据（web，lepimemory profile；该会话**实收工具清单 = `ask_user_question` / `web_fetch` / `web_search`，无 bash/fs**）
 
 问题：「我下周要见谁来着？提醒我一下。」（1 step，Took 2s，**0 次工具调用**）
 
@@ -63,7 +63,7 @@ user/message seq 10 source.kind=lepimemory-recall  form=recall
 ## 坑与备注
 
 1. **headless 环境不干净（实测确认）**：headless 的默认编码 preset **没被换掉**（`--patch` 的 `agent-preset-registry` 在 headless 不存在），host 面仍挂 `tool-bash`/`tool-fs` 等 → 模型会 `curl http://127.0.0.1:8888/...` 直连 Hindsight（甚至读仓库文件），**绕过**我们的注入。
-   → 测试/演示**只用真正的 `lepimemory` profile（web，编码工具已从 host 面挪走）**；且以**结构性判据**为准，「模型提到记忆」在 headless 里不算数。
+   → 测试/演示**只用真正的 `lepimemory` profile（web）**——其 preset 把行裁在 agent 之外（该 profile 实测实收工具仅 `ask_user_question`/`web_fetch`/`web_search`）；且以**结构性判据**为准，「模型提到记忆」在 headless 里不算数。
 2. ⚠️ 由此也暴露一个**演示风险**：lepimemory preset 里 `tool-web` 的 `fetch` 开着，模型理论上也能自己去打 API 读记忆、绕过归因。
    → 若要杜绝，需评估收紧 web fetch；当前记为**已知未决**。
 3. 归因仍是**朴素版**（分数阈值）；「情绪门控召回排序」「候选集/排除理由进审计」已具备，调优留后续。

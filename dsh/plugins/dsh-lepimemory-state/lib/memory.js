@@ -156,7 +156,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             // ② 交 Hindsight concise 抽取；③ 信任等级以 tags 标注。fire-and-forget（后台，不在乎延迟，给足预算）。
             const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
             client
-                .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs })
+                .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
                 .then((res) => appendAudit(retainAudit, {
                     type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
                     ok: true, chars: content.length, items: res?.items_count, content,
