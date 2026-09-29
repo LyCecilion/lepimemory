@@ -399,8 +399,8 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 
 ### Phase 2 — Lv1 完整
 
-- [ ] 人格状态机（显式状态 + 规则 + 衰减 + 持久化）
-- [ ] persona 注入（`PERSONA_PREFIX/SUFFIX_SECTION` + 动态状态快照）
+- [x] 人格状态机（显式状态 + 规则 + 衰减 + 持久化）
+- [x] persona 注入（正式人设文本 + 动态状态快照）
 - [ ] 状态审计（插件自有 `audit.jsonl`：前值→后值 + 命中规则）+ 状态面板
 - [ ] 上下文管理策略（长历史的压缩/筛选，可用 dsh `compaction` 或自研）
 

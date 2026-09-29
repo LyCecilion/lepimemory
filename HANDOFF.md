@@ -88,6 +88,9 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - ✅ **状态机 v1 完成**（2026-09-29）：订阅 `session/event`，`turn/end` 收尾时按**数据化规则**推进状态
   （`lib/machine.js`）+ 心境 6h 半衰期衰减，写 `state.json` 并追加 `audit.jsonl`（前值→后值 + 命中规则）。
   证据 `docs/research/artifacts/state-machine.md`。**待办**：规则集扩充与量级实测（单轮增量低于渲染阈值）。
+- ✅ **正式人设注入**（2026-09-29）：preset `persona` 行换正式文本（身份内核 / 说话方式 / 边界），
+  经 persona 包注册为 agent 作用域 prefix（suffix 空=遮蔽全局后缀）。实机 A/B：不再自称 AI，也无「工作目录 / 跑命令」泄漏。
+  证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 

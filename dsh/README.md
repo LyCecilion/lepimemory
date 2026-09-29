@@ -41,5 +41,9 @@ systemctl --user restart lepimemory-dsh
   - 每次变更写 `state.json` + 追加 `audit.jsonl`（`{时刻, 轮次, 命中规则, 维度前→后}`，人可读）。
   - ⚠️ **不往 session log 加自定义事件**（out-of-tree 会破坏会话重载，见 `docs/research/artifacts/session-event-spike.md`）——
     「效果」靠已落的 `system/message` Prompt Diff，「原因」靠自有 `audit.jsonl`（`CONCEPTS.md §5.3`）。
-- **待办（Phase 3 后续）**：规则集设计与量级实测；正式人设注入（替换 persona 占位）；记忆召回竖切（接 Hindsight，含限流退避）。
+- **正式人设（Phase 1 占位债已清偿）**：profile 的 preset `persona` 行换成完整人设（身份内核 + 说话方式 + 边界），
+  经 persona 包注册为 agent 作用域的 persona prefix/suffix（`suffix: ''` = 遮蔽全局后缀，不显示工作目录等）。
+  A/B 实测：不再自称 AI/助手，也不再冒「工作目录/跑命令」的编码助手口吻（证据 `docs/research/artifacts/persona-injection.md`）。
+  文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
+- **待办（Phase 3 后续）**：规则集设计与量级实测；记忆召回竖切（接 Hindsight，含限流退避）。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）
