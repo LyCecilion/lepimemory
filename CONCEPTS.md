@@ -259,32 +259,31 @@ Bank 划分：**一个角色 = 一个 bank**（严格隔离，无跨库泄漏）
 
 ### 5.3 审计（跨层）
 
-**审计数据模型**：dsh 的 session log 是主账本，自研 durable 事件挂在上面。
+**审计数据模型**：dsh 的 session log 是主账本。
 
-用 `SessionEventMap` 声明合并追加我们自己的事件类型（`docs/subsystems/session.md` 确认插件可声明，事件为 log-only、可持久化、可回放）：
+> ⚠️ **2026-09-29 更正（实测推翻）**：原计划「用 `SessionEventMap` 声明合并、追加我们自己的 durable 事件类型」**对 out-of-tree 插件不可行**——本版本写侧 `Session.append()` 无 `ignorable` 透传入口，读侧按仓库内**静态白名单** `KNOWN_SESSION_EVENT_TYPES` 准入；追加一个不在表内、又不带 `ignorable: true` 的新类型，会让**整个会话在重载时被整档拒绝**（实测原文见 `docs/research/dsh-findings.md` §2.14）。**故：不能往 session log 加自定义事件类型。**（原表里列举的 `memory/recall` / `memory/retain` / `persona/state-diff` / `decision/attribution` 四个自研事件全部作废。）
 
-| 事件 | 承载 |
-| --- | --- |
-| `memory/recall` | 查询、候选集、每条的入选用理由与排除理由 |
-| `memory/retain` | 写入判断结果、写了什么、为什么写 |
-| `persona/state-diff` | 前值 → 后值、触发事件、命中规则 |
-| `decision/attribution` | 本轮回答受哪些记忆与状态影响 |
+据此，审计改为**分层落点**：
 
-同时用 dsh 已有的标注能力：
+| 审计要素 | 落点 | 说明 |
+| --- | --- | --- |
+| **效果**：模型实际看到什么 | `system/message`（dsh 原生） | 状态/记忆注入本就是**提示词变更** → 每次变更都落 `system/message`；Trajectory 的 **Prompt Diff** 即「效果」的可回放证据 |
+| **原因**：状态为何变化 | **插件自有持久化** | 状态文件 + 追加式审计 `<DSH_HOME>/lepimemory/audit.jsonl`：`{时刻, 触发事件, 命中规则, 维度前→后}`；人可读、可回放、供自研面板 |
+| 工具与审批 | `tool/call` + `tool/result` + `approval/*`（dsh 原生） | 直接可用 |
+| 记忆召回（未来） | 插件自有持久化 / 服务侧 | Hindsight `trace` 已含完整召回明细，落自有审计即可 |
 
-- `MessageSourceMap` 是 **merge-extensible** 的，插件声明自己的 `kind`——记忆注入可以带自己的来源类型。
-- `sourceEventSeqs` 让 surface 事件引用更早的事件 seq，做归因覆盖。
-- `tool/result.meta` 承载工具私有、随 log 回放一致的展示元数据。
+> 原「插件声明 `MessageSourceMap` kind / 用 `sourceEventSeqs` 归因」仍限**原生 surface 事件的产出方**；我们无法新增 surface 事件，故这两项对自研层暂不适用（待复核）。`tool/result.meta` 同理，仅产出工具可用。
+> 若将来确需「带 schema 校验 + 变更事件」的审计，再评估 `ctx.storageDomain`（路 A）——其 `domain/changed` 是 **cordis 服务事件**，不属 session log，无重载问题。
 
 **审计要能回答的问题**（照抄题目，逐条对应）：
 
 | 题目问题 | 数据来源 |
 | --- | --- |
-| Agent 使用了哪些上下文和记忆 | `request/context`（dsh 原生）+ `memory/recall` |
-| 内部状态是否发生变化 | `persona/state-diff` |
-| 是否调用了工具，输入和结果是什么 | `tool/call` + `tool/result`（dsh 原生）+ `approval/*` |
-| 最终产生了什么语言或行为 | `assistant/message` / `assistant/attempt` |
-| **为什么这样决定** | `decision/attribution` + 上述事件的交叉引用 |
+| Agent 使用了哪些上下文和记忆 | `request/context`（原生）+ `system/message` 的 Prompt Diff + 自研审计 |
+| 内部状态是否发生变化 | 自研审计（前值→后值）+ Prompt Diff |
+| 是否调用了工具，输入和结果是什么 | `tool/call` + `tool/result`（原生）+ `approval/*` |
+| 最终产生了什么语言或行为 | `assistant/message` / `assistant/attempt`（原生） |
+| **为什么这样决定** | 自研审计（命中规则 + 记忆入选/排除理由）+ 上述交叉引用 |
 
 dsh 另有现成设施可复用：`sessionTelemetry` seam（含 OTel backend）、`agent/assistant-stream` 实时帧、`session-query`（跨会话检索与血缘）、`experimental/inspector`（CDP 查看 Cordis 树）。
 
@@ -395,14 +394,14 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 - [ ] dsh profile 定义（模型接入 + 按 row id 裁剪编码向工具）
 - [ ] 最小 Host 插件包（可加载、可看到效果）
 - [ ] Hindsight 跑起来（单机），bank 建好，`retain_mission` 配好
-- [ ] 竖切：一次交互 → 写入判断 → `retain` → 下轮 `recall` → 归因 → `memory/recall` 事件
+- [ ] 竖切：一次交互 → 写入判断 → `retain` → 下轮 `recall` → 归因 → 自研审计（插件自有持久化）
 - [ ] 最小审计面板：能看到「这句话被哪条记忆驱动」
 
 ### Phase 2 — Lv1 完整
 
 - [ ] 人格状态机（显式状态 + 规则 + 衰减 + 持久化）
 - [ ] persona 注入（`PERSONA_PREFIX/SUFFIX_SECTION` + 动态状态快照）
-- [ ] `persona/state-diff` 事件 + 状态面板
+- [ ] 状态审计（插件自有 `audit.jsonl`：前值→后值 + 命中规则）+ 状态面板
 - [ ] 上下文管理策略（长历史的压缩/筛选，可用 dsh `compaction` 或自研）
 
 ### Phase 3 — Lv2 完整
@@ -410,7 +409,7 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 - [ ] 记忆写路径三层判断（不写 / experience / fact-preference）
 - [ ] 事实·推断·经历的信任等级与衰减策略
 - [ ] 冲突 supersede、遗忘（用户要求忘记的实际效果）
-- [ ] 归因筛选（含排除理由）与 `decision/attribution`
+- [ ] 归因筛选（含排除理由）与自研归因审计（复用 `tool/result` + 自有持久化）
 - [ ] 行动能力：至少一类真实副作用操作 + 审批 + 失败影响状态
 - [ ] 审计与回放（双档：完整事件流 / 人可读归因）
 

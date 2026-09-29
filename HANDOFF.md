@@ -81,6 +81,10 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
   证据：`docs/research/artifacts/state-persistence.md`；profile 的 `state:` 覆盖已删、常驻实例 `~/.dsh/profiles/lepimemory/` 已同步并重启。
+- ⚠️ **审计落点更正（2026-09-29，spike 实测推翻）**：out-of-tree 插件**不能**往 session log 加自定义事件类型——
+  写侧 `Session.append()` 无 `ignorable` 透传，读侧按静态白名单准入，追加即让**整个会话重载被拒**。
+  `CONCEPTS.md §5.3` 已改为「分层落点」：**效果**靠 `system/message` 的 Prompt Diff（可回放），**原因**落**插件自有持久化**。
+  详见 `docs/research/dsh-findings.md` §2.13–2.14。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
