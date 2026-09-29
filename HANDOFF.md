@@ -76,7 +76,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步**：竖切闭环（阶段 3，把 recall 接进 dsh）＋ 自研状态机（状态注入接到 `dsh-lepimemory-state` 的 section 上）
+- ⏭️ **下一步（2026-09-29 下午）**：① 记忆召回竖切（Hindsight `recall` → 归因筛选 → 注入，含 429 退避）；② 规则集与量级标定（让状态几轮内可见地改变语气）；③ `docs/DEMO.md` 剧本 + 状态面板
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
@@ -377,8 +377,8 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 - [x] `docker-compose.yml`（Hindsight + 健康检查 + 卷）— 草案 v0.1
 - [x] `.env.example`（**绝不提交真 key**）
 - [x] `Makefile`：`make dev` / `make clean` / `make reset` — 草案 v0.1（compose 已装，可完整演练）
-- [x] `README.md`（写清启动时间：「第一次启动请等待 X 分钟」）— 骨架草稿，待定稿
-- [x] `docs/DEMO.md`（评委自助路径 + 演示剧本）— 骨架草稿，待定稿
+- [x] `README.md`（写清启动时间：「第一次启动请等待 X 分钟」）— 已定稿
+- [x] `docs/DEMO.md`（评委自助路径 + 演示剧本）— 骨架草稿；剧本待下午补（依赖召回竖切）
 
 演示剧本见 `CONCEPTS.md` §6.5，5 步，第 5 步（遗忘预告）是最能拉开差距的一段。
 
