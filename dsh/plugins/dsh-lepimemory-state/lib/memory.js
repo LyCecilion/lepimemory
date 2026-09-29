@@ -1,24 +1,28 @@
 /**
- * 记忆桥：每轮按用户输入去 Hindsight 召回长期记忆，归因筛选后注入模型上下文。
+ * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）。
  *
- * 扩展点（2026-09-29 复核，见 docs/research/artifacts/memory-recall.md）：
- *   `agent/pre-step` waterfall —— 监听器可 `await` 异步召回，再把消息并入 `enter(messages)`。
- *   注入的消息带 `source: { kind, form: 'recall' }`，会作为普通 `user/message` 落库（可回放/可审计）。
- *   （`agent.inject()` 是「无唤醒的下一界推送」，可能错过本轮，不用于此处。）
+ * 读路径（2026-09-29 定）：
+ *   `agent/pre-step` waterfall —— `await` Hindsight `recall(trace)` → 归因筛选 →
+ *   注入 `source:{kind, form:'recall'}` 的 user 消息（落库可回放）。
  *
- * 降级：召回失败/超时 → **无记忆回答**，并写自有审计（别让演示当场 500）。
- * 审计落 `recall.jsonl`（与状态机的 audit.jsonl 分开）。
+ * 写路径（本文）：
+ *   `session/event` 收尾时，对**本轮用户说过的话**做最笨的「写入判断」→ `retain`。
+ *   三层判断（CONCEPTS §4.2）：① 过短/寒暄 → 不写；② 其余用户陈述 → 交 Hindsight `concise` 抽取
+ *   （它本身会过滤填充语、抽成事实）；③ trust 等级先用 tags 标注（`trust:fact`）。
+ *   失败/退避耗尽 → 写 `retain.jsonl` 审计，绝不影响对话。
+ *
+ * 降级：任何记忆操作失败都**不阻断**对话；全部落自有审计。
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { HindsightClient, attribute, renderRecall } from "./hindsight.js";
 
-/** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；未知 kind 由消费方按不透明处理）。 */
+/** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；参考仓内 session-reference 的自定义 kind）。 */
 const SOURCE_KIND = "lepimemory-recall";
 
-function recallAuditFileFor(stateFile) {
-    return path.join(path.dirname(stateFile), "recall.jsonl");
+function auditFileFor(stateFile, name) {
+    return path.join(path.dirname(stateFile), name);
 }
 
 /** 从进入本步的消息里取「真·用户输入」文本（排除我们自己注入的 recall 消息）。 */
@@ -28,6 +32,16 @@ function userTextOf(messages) {
         .flatMap((m) => (m?.content ?? []).filter((b) => b?.type === "text").map((b) => b.text))
         .join("\n")
         .trim();
+}
+
+/** 追加一行 JSON 审计（best-effort）。 */
+function appendAudit(file, entry, logger) {
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
+    } catch (err) {
+        logger.error("审计写入失败（%s）：%s", file, err.message);
+    }
 }
 
 /**
@@ -49,20 +63,18 @@ export function installMemory(ctx, config, { logger, stateFile }) {
     });
     const minSemantic = memory.minSemantic ?? 0.35;
     const maxItems = memory.maxItems ?? 4;
-    const auditFile = memory.auditFile ?? recallAuditFileFor(stateFile);
+    const recallAudit = memory.auditFile ?? auditFileFor(stateFile, "recall.jsonl");
+    const retainAudit = memory.retainAuditFile ?? auditFileFor(stateFile, "retain.jsonl");
+
+    const retainEnabled = memory.retain?.enabled !== false;
+    const retainMinChars = memory.retain?.minChars ?? 6;
 
     /** sessionId -> 已注入的 turn（每轮至多注入一次）。 */
     const injectedTurns = new Map();
+    /** sessionId -> 本轮用户说过的话（写路径缓冲）。 */
+    const turnUserText = new Map();
 
-    function audit(entry) {
-        try {
-            fs.mkdirSync(path.dirname(auditFile), { recursive: true });
-            fs.appendFileSync(auditFile, `${JSON.stringify(entry)}\n`, "utf8");
-        } catch (err) {
-            logger.error("recall 审计写入失败：%s", err.message);
-        }
-    }
-
+    // ── 读路径：pre-step 召回 → 归因 → 注入 ─────────────────────────────
     ctx.on(
         "agent/pre-step",
         async ({ agent, turn, signal }, next) => {
@@ -79,30 +91,21 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             try {
                 response = await client.recall(query, { trace: true, signal });
             } catch (err) {
-                audit({
-                    type: "recall",
-                    at: new Date().toISOString(),
-                    session: sessionId,
-                    turn,
-                    query,
-                    degraded: true,
-                    error: String(err?.message ?? err),
-                });
+                appendAudit(recallAudit, {
+                    type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
+                    degraded: true, error: String(err?.message ?? err),
+                }, logger);
                 return decision; // 降级：无记忆回答
             }
 
             const { picked, excluded } = attribute(response?.results, { minSemantic, maxItems });
-            audit({
-                type: "recall",
-                at: new Date().toISOString(),
-                session: sessionId,
-                turn,
-                query,
+            appendAudit(recallAudit, {
+                type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
                 candidates: (response?.results ?? []).length,
                 picked: picked.map((m) => ({ id: m.id, text: m.text, semantic: Math.round(m.semantic * 1000) / 1000 })),
                 excluded: excluded.map((m) => ({ id: m.id, reason: m.reason })),
                 ms: Date.now() - started,
-            });
+            }, logger);
 
             if (picked.length === 0) return decision;
             injectedTurns.set(sessionId, turn);
@@ -122,5 +125,48 @@ export function installMemory(ctx, config, { logger, stateFile }) {
         { prepend: true },
     );
 
-    logger.info("记忆桥已装载：%s（bank=%s）", client.baseUrl, client.bank);
+    // ── 写路径：本轮用户说的话 → 最笨的写入判断 → retain ─────────────────
+    if (retainEnabled) {
+        ctx.on("session/event", (session, event) => {
+            const id = String(session.id);
+            if (event.type === "user/message") {
+                if (event.data?.source?.kind !== "user") return;
+                const text = (event.data.content ?? [])
+                    .filter((b) => b?.type === "text")
+                    .map((b) => b.text)
+                    .join("\n")
+                    .trim();
+                if (text) turnUserText.set(id, [...(turnUserText.get(id) ?? []), text]);
+                return;
+            }
+            if (event.type !== "turn/end") return;
+            const texts = turnUserText.get(id);
+            turnUserText.delete(id);
+            if (!texts || texts.length === 0) return;
+
+            const content = texts.join("\n").trim();
+            // ① 过短/寒暄 → 不写
+            if (content.length < retainMinChars) {
+                appendAudit(retainAudit, {
+                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                    skipped: true, reason: "过短（视为寒暄/噪声）", chars: content.length,
+                }, logger);
+                return;
+            }
+            // ② 交 Hindsight concise 抽取；③ 信任等级以 tags 标注。fire-and-forget（后台，不在乎延迟，给足预算）。
+            const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
+            client
+                .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs })
+                .then((res) => appendAudit(retainAudit, {
+                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                    ok: true, chars: content.length, items: res?.items_count, content,
+                }, logger))
+                .catch((err) => appendAudit(retainAudit, {
+                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                    degraded: true, error: String(err?.message ?? err), content,
+                }, logger));
+        });
+    }
+
+    logger.info("记忆桥已装载：%s（bank=%s，retain=%s）", client.baseUrl, client.bank, retainEnabled ? "on" : "off");
 }

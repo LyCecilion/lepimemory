@@ -46,5 +46,6 @@ systemctl --user restart lepimemory-dsh
   A/B 实测：不再自称 AI/助手，也不再冒「工作目录/跑命令」的编码助手口吻（证据 `docs/research/artifacts/persona-injection.md`）。
   文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
 - **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace)`）→ **归因筛选**（分数阈值 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
-- **待办（Phase 3 后续）**：记忆**写路径**（`retain` 三层判断）；规则集设计与量级实测；`docs/DEMO.md` 剧本 + 状态面板。
+- **记忆写路径（v1）**：`turn/end` 收尾时对本轮**用户陈述**做判断（过短/寒暄跳过）→ Hindsight `retain`（`concise` 抽取）+ `trust:fact` 标签；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算）。三层判断的 experience/推断档待接。
+- **待办（Phase 3 后续）**：记忆的 experience/推断档；规则集设计与量级实测；`docs/DEMO.md` 剧本 + 状态面板。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

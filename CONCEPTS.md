@@ -406,7 +406,7 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 
 ### Phase 3 — Lv2 完整
 
-- [ ] 记忆写路径三层判断（不写 / experience / fact-preference）
+- [x] 记忆写路径 v1（不写/寒暄跳过 + 用户陈述→`retain` concise + `trust:fact` 标签；experience/推断待接）
 - [ ] 事实·推断·经历的信任等级与衰减策略
 - [ ] 冲突 supersede、遗忘（用户要求忘记的实际效果）
 - [ ] 归因筛选（含排除理由）与自研归因审计（复用 `tool/result` + 自有持久化）
