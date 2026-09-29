@@ -35,6 +35,9 @@
 6. **审计底座**：session log 为 append-only 事件日志；"Model-visible ⟺ logged" 有运行时校验；插件可经 `SessionEventMap` 追加自定义事件。
 7. **裁剪落点（重要）**：Web 面下每个会话挂一个 agent preset；编码向行（tool-bash / fs / skills / …）已被 bundle 从 host 面挪走、**由 preset 决定是否挂载**。→ 想裁，就自定义 preset + 改 `agent-preset-registry` 默认。新增行用 `- insert:`；对既有行的补丁为「整行替换 config」。
 8. **遥测**：OTel 默认 `FEEDBACK_ONLY` 发送至 deepseeksvc（`DSH_TELEMETRY_MODE` 可调）。
+9. **section `text` 支持函数形式**：每次 prompt 组装都会调用 `section.text(context)`（`packages/core/system-prompt/src/index.ts:606`）——「每轮重读外部状态」的机制依据（2026-09-29 复核）。
+10. **插件日志通道**：cordis 标准 `ctx.logger`（`ctx.logger('<name>')` 取具名 logger）——插件报错/提示统一走它（2026-09-29 复核）。
+11. **`DSH_HOME` 解析语义**：`resolveDshHome()` = 显式配置 → `$DSH_HOME` → `~/.dsh`（`packages/util/home-paths`；含 `~` 展开与绝对化）——插件自持文件路径需与之一致（2026-09-29 复核）。
 
 ## 3. 注意事项与坑
 
@@ -121,3 +124,4 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - 2026-09-28 v0.3：修正 `CONCEPTS.md` §6.5 启动命令（见 3.6）。
 - 2026-09-28 v0.4：`make dev` 全流程实测（含两处修复）；§3.7 更新（compose 已装）。
 - 2026-09-28 v0.5：脱敏与端点环境变量化——个人数据改合成示例；`LEPI_LLM_BASE_URL` 经 `!!js` 读取（非法表达式快速失败已实测）；工作区纪律见根 `HANDOFF.md`。
+- 2026-09-29 v0.6：复核补 §2.9–2.11（`section.text` 函数形式 / `ctx.logger` / `DSH_HOME` 解析语义）与 headless 测试台构成，供 Phase 3 状态持久化实现。
