@@ -7,7 +7,7 @@
 
 **状态**：Phase 0–2 已完成（架构决策 / dsh 状态注入验证 / Hindsight 记忆服务跑通）。
 **Phase 3 进行中**：状态持久化 + 事件驱动状态机（含心境衰减与自有审计）+ 正式人设注入 + **记忆读写闭环**（`recall`→归因→注入；对话→`retain`）均已落地；
-待续：experience/推断档、规则集标定、`DEMO.md` 剧本——进度与证据见 `HANDOFF.md` 与 `docs/research/artifacts/`。
+待续：真实行动 + 遗忘、规则集标定、状态面板——进度与证据见 `HANDOFF.md` 与 `docs/research/artifacts/`。
 
 ## 快速开始（评委自助）
 

@@ -76,7 +76,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步**：① 记忆 experience/推断档（待行动工具落地）＋ 遗忘（用户要求忘记的实际效果）；② 规则集与量级标定；③ `docs/DEMO.md` 剧本 + 状态面板
+- ⏭️ **下一步**：① 真实行动工具 + 审批（含 experience 档 + 失败影响状态）；② 遗忘（计划预览→执行）；③ 规则集标定 + 状态面板（client 插件）
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
@@ -173,7 +173,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 ### P2 仍开着的两个旧待办
 
 1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
-2. `docs/DEMO.md` 仍是骨架草稿（头部注释 + 「待补」），剧本每步的预期现象/解说词要在竖切闭环跑通后补。
+2. ✅ `docs/DEMO.md` 已定稿（2026-09-29）：5 步剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
 
 ### P3 Advisor 三项复核收尾（2026-09-29，已完成）
 
@@ -382,7 +382,7 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 - [x] `.env.example`（**绝不提交真 key**）
 - [x] `Makefile`：`make dev` / `make clean` / `make reset` — 草案 v0.1（compose 已装，可完整演练）
 - [x] `README.md`（写清启动时间：「第一次启动请等待 X 分钟」）— 已定稿
-- [x] `docs/DEMO.md`（评委自助路径 + 演示剧本）— 骨架草稿；剧本待下午补（依赖召回竖切）
+- [x] `docs/DEMO.md` — 已定稿（剧本 + 审计落点 + 未实现清单）
 
 演示剧本见 `CONCEPTS.md` §6.5，5 步，第 5 步（遗忘预告）是最能拉开差距的一段。
 
