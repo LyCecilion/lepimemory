@@ -118,7 +118,7 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - `.env.example` —— Hindsight key + dsh 端点 key；全部可留空（零 key 路径）。
 - `Makefile` —— `dev / stop / clean / reset`；`dev` = compose 等健康检查 → dsh 前台启动；`DSH_HOME` 默认 `./.dsh`。
 - `.gitignore` —— `.env` / `.dsh/` / `node_modules/`。
-- `README.md`（已定稿）、`docs/DEMO.md`（骨架草稿，待补剧本）。
+- `README.md`、`docs/DEMO.md`（均已定稿）。
 - 已验证：compose YAML 可解析 ✅、`make -n dev` 命令序列正确 ✅、profile 沙盒启动链路 ✅、
   **完整 `make dev` ✅**（本机 3181 冒烟：401 → 200；插件行入组合树）。
 - 测试中发现并修复两处（2026-09-28）：① `install-profile` 缺依赖物化 → 增加
