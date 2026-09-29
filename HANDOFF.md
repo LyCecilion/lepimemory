@@ -122,14 +122,14 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - **修法**：Makefile 在 `DSH_HOME ?=` 下一行加 `export DSH_HOME`，然后删掉第 35 行多余的 `DSH_HOME=$(DSH_HOME)` 前缀（两处写法统一）。
 - **验收**：`make -n dev` 输出中 dsh 进程能拿到 `DSH_HOME`；最硬的验收是临时把 `~/.dsh/profiles/lepimemory` 改名，`make dev PORT=3181` 仍能起来（验完改回来）。
 
-### P1 未提交的文档修复（本次 Agent 已改，待你复核后提交）
+### P1 文档修复（已入库并推送：`50caed2`）
 
 `git diff` 里 5 个文件，均为文档：
 
 | 文件 | 改了什么 |
 | --- | --- |
 | `README.md` | 第 19 行 autolink 语法修复（原 `**<http://…**，按>` 错位）；去掉「骨架草稿」注释头 |
-| `HANDOFF.md` | Git 备忘改成现状（5 笔已签名、未 push、`6054b74` 已处置）；本清单 |
+| `HANDOFF.md` | Git 备忘改成当时现状（5 笔已签名、`6054b74` 已处置）；本清单 |
 | `docs/research/dsh-findings.md` | §6.3 补「persona 遮蔽是**必须项**」+ A/B 证据 + 槽位机制依据 |
 | `docs/research/artifacts/ab-fake-persona.md` | 状态 B 下加警示：coding-agent 口吻是底座人设渗透，**别当角色文案范例** |
 | `docs/research/hindsight-findings.md` | §4.2（分数饱和）、§4.3（BM25）标注「已于 §6.6 / §6.4 解决」，防止与后文矛盾 |
@@ -157,7 +157,17 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
 2. `docs/DEMO.md` 仍是骨架草稿（头部注释 + 「待补」），剧本每步的预期现象/解说词要在竖切闭环跑通后补。
 
+### P3 Advisor 三项复核收尾（2026-09-29，已完成）
+
+- **§4 = verify-only ✅**：`hindsight-findings.md` §4 的 BM25 条目在位（条目 3）、编号 1–6 完整；**无需改动，也未重复插入**。
+- **验收 #4 / 路 B 路径表述 ✅**：已同步进下方 Phase 3 节——路径统一为 `<DSH_HOME>/lepimemory/state.json`；验收 #4 改由**插件自持校验器**负责（`storageDomain` 的 `invalid-record` 不适用于路 B）。
+- **插件头注释措辞 ✅（定稿，随实现落地）**：现稿「不在 published exports…无法 import，只能自持」表述过强——`ctx.systemPrompt.getSectionOrder()` 运行时可取（源码复核：`packages/core/system-prompt/src/index.ts:470`）。实现时改写为「常量不可 import；运行时**可取但有意不用**（理由见上文『补充』）」。
+
+> 相关 commit（`6b2ae9e` / `ad11b82` / `50caed2`）均已推送；本地与 `origin/main` 一致（`git rev-list --count origin/main..HEAD` = 0）。
+
 ## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储
+
+> **分工（2026-09-29）**：本节的**实现、验收、提交由你本人执行**；Agent 已完成全部前置复核，「实现规格」与「验收配方」已按复核结果定稿。
 
 **目标**：`dsh-lepimemory-state` 不再读 `config.state` 字符串，改为读一份**持久化、结构化**的状态，并在每次 prompt 组装时实时渲染。这是状态机的地基，也验证「插件能读写跨会话的持久状态」。
 
@@ -181,43 +191,70 @@ pnpm view @deepseek-ai/dsh-storage-domain@0.1.7-rc.2 version   → 0.1.7-rc.2 �
 
 > 复核命令：用 `pnpm view <pkg> versions` 看全量，**不要**用 `pnpm view <pkg> version`（只返回 latest）。
 
-#### 两条路：先选小的（推荐路 B）
+#### 两条路：已定走小的（路 B）
 
 本步目标只是「证明能读写跨会话持久状态」。两条路都能达成，代价差很多：
 
-| | 路 A：`ctx.storageDomain`（正规但重） | 路 B：插件自持 JSON 快照（**推荐先走**） |
+| | 路 A：`ctx.storageDomain`（正规但重；存档备查） | 路 B：插件自持 JSON 快照（**已定走这条**） |
 | --- | --- | --- |
 | 挂载侧 | ✅ 无需加行——`dsh-base` 已挂 storage / storage-json(root=`dshHomePath('storages')`) / storage-domain（`packages/bundle/base/cordis.patch.yml:161-177`） | 同左，但不使用它 |
 | 插件侧 | ⚠️ **需新增 2 条依赖**（`@deepseek-ai/dsh-storage-domain@0.1.7-rc.2` + `zod@4.x`）。插件目前**零依赖、无 node_modules**，profile 只 link 了它自己；新依赖能否在 `dsh plugin install` 下解析，**尚未验证** | ✅ 零依赖，`node:fs` 足够 |
 | 收益 | schema 校验、写入持久化后才 resolve、每次写发 `domain/changed` 事件 | 只需「能存能读」 |
 | 风险 | 依赖解析未验 + 上游预稳定 | 无 |
 
-**判断**：本步走 **路 B**——先把闭环跑通；schema 与变更事件留给真正需要它的状态机阶段（那时 `domain/changed` → 审计事件才真有价值）。若改走路 A，**必须先实测依赖在 `dsh plugin install` 下能解析**，再把结论写进文档。
+**已定**：本步走 **路 B**（路 A 的依赖解析仍未实测，不进本步）——先把闭环跑通；schema 与变更事件留给真正需要它的状态机阶段（那时 `domain/changed` → 审计事件才真有价值）。
 
-**实现要点（两路共用）**：
+**实现规格（路 B 定稿，照此实现）**：
 
-- **插件声明 `inject: ["systemPrompt"]`**（路 A 再加 `"storageDomain"`）。`storageDomain.open()` 是异步的，需在 `apply` 里 open、在 effect disposer 里 `domain.close()`。
-- **section 的 `text` 可传函数** `(context) => string`，每次组装都调用——路 B 靠这个「每轮重读文件」，改状态**无需重启 dsh**（选路 B 的关键理由：验证循环最快）。
-- 路 B 路径解析：优先 `config.stateFile`，否则基于 `process.env.DSH_HOME`（P0-2 修完后已 export，插件可见）。
-
-**建议的状态结构**（对齐 `DESIGN_NOTES.md` §1.4，先少而正交）：
+- **依赖**：保持零依赖（仅 `node:fs` / `node:path` / `node:os`）；`inject: ["systemPrompt"]` 不变。
+- **状态文件路径（两层）**：**补丁层**把 `config.stateFile` 设为 `!!js dshHomePath('lepimemory/state.json')`——走 dsh 自己的解析（显式 home > `$DSH_HOME` > `~/.dsh`），比插件内猜目录更稳（上游同款：`packages/bundle/base/cordis.patch.yml` 的 `dshHomePath('sessions' / 'storages')`；`dshHomePath` 由 app-boot 暴露给 Loader `!!js`）。**插件内**保留 `config.stateFile ?? <兜底>`：`$DSH_HOME`（未设 → `~/.dsh`）下 `lepimemory/state.json`。**不是 `storages/`**：那是 storage-json 后端的根（路 A 专属），本文件是插件自有物。（2026-09-29 探针实测：该表达式在配置行可正常求值——组合 dump 与实跑均通过。）
+- **启动（`apply`）**：文件不存在 → `mkdir -p` 父目录并写入初始状态（日志记路径）；读取/校验失败 → **抛出错误，消息含具体字段路径**，不改写文件、不回落默认值。
+- **重读（`text` 回调）**：每轮组装重读文件；失败 → `ctx.logger('lepimemory-state').error(...)`（同错去重）+ 保留上次有效状态渲染。`text` 函数形式已由上游源码证实（`packages/core/system-prompt/src/index.ts:606`，每轮组装调用）。
+- **校验（手写、逐字段）**：白名单键（拼错的字段也能报出名字）；数值范围 `valence ∈ [-1,1]`、`arousal / trust / closeness / familiarity ∈ [0,1]`；`updatedAt` / `at` 须为可解析时间串；`reasons[].dimension ∈ {mood, relation}`（状态机阶段可扩）。错误消息建议：`lepimemory-state: 状态字段 "mood.valence" 无效：期望 -1~1 数值，实际 "high"`。
+- **日志**：统一走 `ctx.logger`（cordis 标准通道；`ctx.logger('<name>')` 取具名 logger）。
+- **渲染**（对齐 `DESIGN_NOTES.md` §1.3 / §1.6）：不出现数值；只渲染**偏离最大的至多 2–3 项** + 原因 + 行为倾向；按「心境 / 对用户」两组聚合。示例：
 
 ```
-mood:      { valence, arousal, updatedAt }      —— 心境，将来要衰减
-relation:  { trust, closeness, familiarity }    —— 对用户，不自然衰减
-reasons:   [{ dimension, text, at }]            —— 最近变化的原因（渲染「为什么」用）
+【内部状态（相对你自己基线的偏移；用它调整语气，不要向用户提及本段）】
+- 心境: 比平常轻快一些
+- 对用户: 信任明显高于平常
+  原因: 她上次说「下次还来找你」
+- 行为倾向: 语气更放松；更愿意分享
 ```
 
-渲染层**不输出数值**，按 `DESIGN_NOTES.md` §1.3 输出「相对基线 + 原因 + 行为倾向」的文本；阈值先写死几档，标注为待实测。
+分档先两档（建议 `|Δ|≥0.25`「明显」、`≥0.10`「略」；待实测后调，`DESIGN_NOTES.md` §1.7）。
 
-**本步不做**：状态更新规则（事件驱动的状态机本体）、衰减、审计事件。本步只要「能存、能读、能渲染、能跨重启」。状态先用一个手动入口改（例如 `ctx.commands` 注册一个 `/state` 调试命令，或直接改 storages 下的 JSON 再重启），证明改状态 → 语气变化即可。
+**状态结构与初始值**（对齐 `DESIGN_NOTES.md` §1.4，先少而正交；初始值＝基线，先写死待实测）：
 
-**验收**：
+```
+mood:      { valence: 0, arousal: 0.4, updatedAt: <ISO 时间> }   —— 心境，将来要衰减
+relation:  { trust: 0.3, closeness: 0.2, familiarity: 0.1 }      —— 对用户，不自然衰减
+reasons:   []                                                    —— [{ dimension, text, at }]，渲染「为什么」用
+```
 
-1. 全新 `DSH_HOME` 下首次启动，自动写入初始状态（`storages/` 下出现对应 JSON）。
-2. 改状态（命令或文件）后，同一输入的回复语气随之变化——复用 `ab-fake-persona.md` 的 A/B 做法。
-3. 重启 dsh 后状态仍在。
-4. 手动把 JSON 改坏，启动时**报错且错误信息指明哪个字段**（`storageDomain` 的 `invalid-record` 会自带），不静默回落默认值。
+文件格式：缩进 JSON + 末尾换行——人类可读，演示时可直接打开给评委看。
+
+**本步不做**：状态更新规则（事件驱动的状态机本体）、衰减、审计事件。本步只要「能存、能读、能渲染、能跨重启」。状态用**手动文件编辑**改：直接编辑 `<DSH_HOME>/lepimemory/state.json`，**无需重启**（每轮重读）——本轮不注册 `/state` 命令（少一个接口面）。
+
+**要改的文件（3 个）**：
+
+1. `dsh/plugins/dsh-lepimemory-state/lib/index.js` —— 按上重写；头注释 order 段按 P3 结论改（「常量不可 import；运行时可经 `getSectionOrder` 取，但**有意不用**」）。
+2. `dsh/plugins/dsh-lepimemory-state/cordis.patch.yml` —— 行内 config 由 `state: …` 改为 `stateFile: !!js dshHomePath('lepimemory/state.json')`。
+3. `dsh/profiles/lepimemory/cordis.patch.yml` §4（文件末尾）—— **整段删掉**对 `lepimemory-state` 的覆盖（含 `state:`）。⚠️ 层级顺序 bundle → profile → home → CLI，且对既有行的补丁是**整行替换 config**：这里只要残留 `state:`（或不完整 config），就会把插件包层的 `stateFile` 整个盖掉（插件退回兜底 + 假配置残留）。
+   顺手同步：插件 `package.json` description、`dsh/README.md`「现状与待办」；**并把改后的 profile 同步进常驻实例的 `~/.dsh/profiles/lepimemory/`**（本体用的是那份拷贝，不同步就会继续用旧的 `state:` 覆盖）。
+
+**验收（照跑并留证到 `docs/research/artifacts/`）**：
+
+1. **首次启动自动写入**（不需要模型；必须**真启动**——`--dump-config` 只组合、不 mount，验不了这条）：全新 home `make dev DSH_HOME=/tmp/lep-smoke DSH=dsh PORT=3099` → 起来后 `cat /tmp/lep-smoke/lepimemory/state.json` 应为初始状态；Ctrl-C 退出。（web 无人对话 → 无模型调用，正好绕开新 home 没有 `.credentials.yaml`；docker 部分与这条无关，也可 `make install-profile DSH_HOME=…` + 裸 `dsh --profile lepimemory --no-open --port 3099`。）
+2. **A/B 语气变化（两类证据分开写）**：
+   - ① **状态文件 → 语气**：先写好 `/tmp/leptest/state-a.json`、`state-b.json`（明显对比：如 `valence ±0.6`、`trust 0.9 vs 0.1`），再 `dsh --profile lepimemory-headless --patch <A.yml> "今天过得怎么样？随便聊两句吧。"` / `--patch <B.yml>`——A/B patch 只把该行 `stateFile` 指向对应 /tmp 文件。**全程隔离，不碰 `~/.dsh` 本体**（它是常驻实例的家）。
+   - ② **无需重启（直证、加分/演示项）**：`make dev` 起的 web，**同一会话**两轮之间编辑上面的 state 文件 → 下一轮语气变。headless 每次新进程，只证①；别拿它当②。
+   - ⚠️ 旧的 `/tmp/lepimemory-dsh-tests/ab-*.yml` 是 `config.state` 时代的，路 B 下**无效**——直接重跑会得「语气无变化」的假阴性；用后即弃或改写成 `stateFile` 版。
+3. **重启后仍在**：同 home、同一 `/tmp` state 文件再启动一次（headless / web 均可），状态与语气不变。
+4. **坏 JSON 报错**（不需要模型）：`--patch` 把 `stateFile` 指到 `/tmp/leptest/broken.json`，分别做 (i) 语法坏 → 报错含位置；(ii) 字段坏（如 `"valence": "high"`）→ 报错含 `mood.valence`。要求：不静默回落、不改写坏文件；运行中改坏 → 日志报错 + 保留上次有效状态。**破坏性用例一律用 /tmp 的 stateFile**，别落到 `~/.dsh`（否则下次重启常驻实例会 apply 抛错）。
+
+> **新 home 重建一次性测试台**：最省事 `cp -Rf ~/.dsh/profiles/lepimemory-headless <HOME>/profiles/ && DSH_HOME=<HOME> dsh plugin --profile lepimemory-headless install`；
+> 可移植建法（2026-09-29 实测）：`DSH_HOME=<HOME> dsh --profile lepimemory-headless --from-default-profile headless --dump-config`（只建不跑）→ 改 `<HOME>/profiles/lepimemory-headless/package.json`（deps 加 `link:<repo>/dsh/plugins/dsh-lepimemory-state`、bundles 追加 `@dsh-external/dsh-lepimemory-state`）→ `install`。结构：`dsh-base` + `@deepseek-ai/dsh-headless` + 本插件，**patch 层留空**。A/B prompt 沿用「今天过得怎么样？随便聊两句吧。」便于与 `ab-fake-persona` 对照。
 
 **Phase 1 的任务清单**（详见 `CONCEPTS.md` §7）：
 

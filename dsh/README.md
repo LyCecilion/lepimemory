@@ -26,8 +26,8 @@ systemctl --user restart lepimemory-dsh
 > `LEPI_LLM_BASE_URL`（端点，profile patch 里经 `!!js` 读取；留空回落 `api.deepseek.com`）。
 > systemd 实例需在 EnvironmentFile 里提供这两个变量。
 
-一次性任务测试台（脚本化 A/B 用）：`dsh --profile lepimemory-headless "……"`（可加 `--patch` 叠加改状态）。
-注意：该 profile 是独立建的、不在本目录；换新 `DSH_HOME` 时需先创建。
+一次性任务测试台（脚本化 A/B 用）：`dsh --profile lepimemory-headless "……"`（Phase 3 起改状态＝编辑 `$DSH_HOME/lepimemory/state.json`；此前仍可 `--patch` 叠加）。
+注意：该 profile 是独立建的、不在本目录；换新 `DSH_HOME` 时需先创建——建法（2026-09-29 实测）：`--from-default-profile headless` 起步（只建不跑用 `--dump-config`）→ `package.json` 的 deps 加本插件 `link:`、bundles 追加本插件（patch 层留空）→ `dsh plugin --profile lepimemory-headless install`。本机样板：`~/.dsh/profiles/lepimemory-headless/`。
 
 ## 现状与待办
 
