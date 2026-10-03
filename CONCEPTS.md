@@ -192,13 +192,15 @@ flowchart LR
 2. **落为 experience**：角色自己做过的事、工具结果、行动成败。题目开放问题「工具产生的结果是否值得进入长期记忆」——我们的答案是**值得，但作为经历而非事实**，并且失败经历要参与状态演化（见 5.1）。
 3. **落为 fact / preference**：用户长期事实、偏好、约定。
 
-对第 3 层要显式区分**事实、推断、经历**三种信任等级，并写进 metadata/tags，因为在审计时它们的可信度不同：
+对第 3 层要显式区分**事实、推断、经历**三种信任等级，写进 item 的 `metadata.trust`，因为在审计时它们的可信度不同（**已落地**，见 `docs/research/artifacts/memory-update-trust.md`）：
 
-| 类型 | 来源 | 信任度 | 衰减 |
+| 类型 | 来源 | 信任度 | 衰减（已实现） |
 | --- | --- | --- | --- |
-| fact | 用户明说 | 高 | 不衰减，冲突时 supersede |
-| inference | 模型推断 | 中 | 可衰减，需要被后续证据确认才升级 |
-| experience | 角色亲历 | 高（但主观） | 不衰减，是关系演化的依据 |
+| fact | 用户明说 | 高 | 不衰减；矛盾走 Hindsight observation **supersede**（读时 `prefer_observations` 取最新） |
+| inference | 角色推断（`remember` 工具写入） | 中 | **半衰期 14 天**；衰减到阈值下则召回时排除（理由入审计） |
+| experience | 角色亲历（行动成功） | 高（但主观） | 不衰减，是关系演化的依据 |
+
+> 读侧 `trustOf()` 优先读 `metadata.trust`，缺失按 Hindsight `fact_type` 兜底；**观察（observation）一律按 fact**——被 consolidation 吸收即「已确认」，不衰减。推断档的**差异化衰减**在 `attribute()` 里按有效分（`semantic × decayFactor`）筛选与排序。
 
 ### 4.3 记忆的读路径（题目的「什么时候应该重新想起它」）
 
@@ -216,6 +218,18 @@ flowchart LR
 - **需要审批的行动**交给 `ctx.approval`（fail-closed，缺席即拒），审批记录不进模型，单独成审计对。
 - **长任务**用 `ctx.jobs.start()` + `run_in_background`，角色状态可持续反映「正在执行」（这是 Lv3 状态外化的素材，也回答题目「如果工具需要长时间执行，角色应该如何表现」）。
 - **行动失败影响状态**：失败是 experience，进入状态机评估。这直接回答题目开放问题。
+
+### 4.5 上下文管理（Lv1）
+
+**决策：复用 dsh 的 compaction 后端，不自研。** 理由与边界（实测见 `docs/research/artifacts/context-management.md`）：
+
+- 「与题目重点关系不大的模块可以直接用成熟方案」——上下文管理是 Lv1 的支撑项，不是命题核心；重复实现一个「按位置裁剪 + 摘要」的引擎不划算。
+- `compaction-basic` 的 region 选择**纯位置化**（跳过 system 节点 0 → 保留近期 token 尾部 → 摘要最老一段）。**状态段在 system/message 节点 0，永不被压**——人格锚的安全由机制保证，不靠约定。
+- 我们的 recall 注入是普通 user 消息，滑出保留尾部会被摘要；**可接受**：记忆真源在 Hindsight，每轮重新召回注入，被压的只是旧副本。
+- 配 `tool-result-pruner`（确定性裁超长工具输出，不碰 user 消息）与 `command-compact`（`/compact` 手动压）。
+- **落点要求**：压缩服务必须挂在 preset 的 `isolate` realm 里（`cordis:group` + `isolate`），否则 registry 拒绝挂载。
+
+> 这一项补上了 Lv1「保留 / 压缩 / 筛选 / 重组」的最后一格；与 §4.3 的**归因筛选**（决定哪些记忆进上下文）合起来，构成完整的上下文组装策略。
 
 ---
 

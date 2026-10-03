@@ -80,25 +80,43 @@ tail -f .dsh/lepimemory/audit.jsonl      # 状态变更：前值→后值 + 命�
 - 点面板里的 **「▸ History」** 可展开**历史账本**：**审计 / 召回 / 写入 / 遗忘 / 行动** 五个标签页，**最新在前**，可翻页（每页 10 条；显示「第 p/q 页 · 共 n 条」）。
 - 想看原始数值：`cat .dsh/lepimemory/state.json`（面板口径与之一致；面板不显示数值、状态段也不显示）。
 
+### 步骤 G — 上下文管理（保留 / 压缩 / 筛选 / 重组）
+- **自动**：长会话把请求压力推过阈值时，dsh 自动把最老的一段历史**摘要**成一条 checkpoint，保留近期原文（本部署阈值为生产值，演示一般到不了；机制见 `docs/research/artifacts/context-management.md`）。
+- **手动**：在对话框输入 **`/compact`** → 立即压缩一次（绕过阈值）。
+- **落点**：会话页 Trajectory 出现「自动生成的 checkpoint」消息（历史被折叠）；会话日志出现 `compaction/start` / `compaction/summary` / `compaction/end`。
+- **注意**：状态段（system 提示词节点 0）**永不被压**；被压的旧「召回注入」只是冗余副本（记忆真源在 Hindsight，每轮重新召回）。
+
+### 步骤 H — 角色自己的推断（`remember`）
+- 说：**「你对我应该有些自己的判断了吧？把重要的一条记成你自己的推断。」**
+- 预期：模型调用 **`remember`** 工具 → `retain.jsonl` 落 `origin:character-inference`。
+- 落点：`:9999` 该条带 `metadata.trust=inference`（推断档，会随时间衰减）；召回时若衰减到阈值以下会被**排除**（`recall.jsonl` 有理由）。
+
+### 步骤 I — 记忆更新 / 冲突（冲突取最新）
+- 先给一条事实（如「我最喜欢的颜色是靛蓝」），再说一条与之相关的新信息。
+- 预期：Hindsight 把矛盾信息合成一条**观察**（「之前…现在…」），下次召回**只返回更新后的版本**（`prefer_observations`）。
+- 落点：`recall.jsonl` 出现 `superseded: true`、入选 `type: "observation"`（注入文本标「综合印象（已更新）」）。
+
 ## 3. 审计要能回答的问题（题目口径）
 
 | 题目问题 | 本 Demo 的落点 |
 | --- | --- |
-| 用了哪些上下文和记忆 | Trajectory 的 Prompt Diff + `recall.jsonl` |
+| 用了哪些上下文和记忆 | Trajectory 的 Prompt Diff + `recall.jsonl`（每条入选含 `type`/`trust`，并记 `superseded` 是否取用了更新版） |
 | 内部状态是否变化 | `state.json` + `audit.jsonl` |
 | 调用了哪些工具、输入结果 | Trajectory 的 Tools / `tool/*` 事件（dsh 原生） |
 | 产生了什么语言或行为 | Chat / Trajectory |
-| **为什么这样决定** | `recall.jsonl`（入选/排除理由）+ `audit.jsonl`（命中规则）+ 上述交叉引用 |
+| 上下文如何被裁剪/压缩 | Trajectory 的 checkpoint 消息 + 会话日志 `compaction/*` 事件 |
+| **为什么这样决定** | `recall.jsonl`（入选/排除理由，含推断档衰减理由）+ `audit.jsonl`（命中规则）+ 上述交叉引用 |
 
 ## 4. 现状与未实现（诚实清单）
 
-已可演示：**人设注入**、**状态持久化 + 事件驱动状态机（含心境衰减与量级标定）**、**记忆读写闭环（recall/retain）**、**遗忘（工具 + 审批，支持子集/单条）与恢复**、**真实行动工具 `write_note`（审批 + experience + 失败进状态）**、**状态面板（client 插件）**、**自有审计**。
+已可演示：**人设注入**、**状态持久化 + 事件驱动状态机（含心境衰减与量级标定）**、**记忆读写闭环（recall/retain）**、**记忆更新/冲突（冲突取最新：Hindsight observation supersede + `prefer_observations`）与三档信任等级（fact / experience / inference）+ 推断衰减**、**遗忘（工具 + 审批，支持子集/单条）与恢复**、**真实行动工具 `write_note`（审批 + experience + 失败进状态）**、**角色推断工具 `remember`**、**上下文管理（长历史保留/压缩/筛选：dsh compaction + `/compact`）**、**状态面板（client 插件）**、**自有审计**。
 
 **未实现（roadmap）**：
 - **面板只读**：历史分页**已做**（`/lepimemory/history`：审计/召回/写入/遗忘/行动，最新在前、可翻页）；但面板不提供写操作（改状态仍走编辑 `state.json` 或 `write_note`），真实 Remote 未接。
 - **规则集仍精简**：三条（熟悉度 / 行动成功 / 工具失败）+ 心境 6h 半衰期衰减；更细的关系 / 情绪事件未接。
-- **上下文管理策略**（长历史的压缩 / 筛选）未接（compaction 暂禁）。
-- 事实·推断·经历的**信任等级与衰减策略**未细化。
+- **记忆更新无显式工具**：新旧矛盾走 Hindsight 原生 observation（refine-not-overwrite），我们只做「取最新 + 审计」；未提供「手动把 A 改成 B」的显式工具。
+- **衰减仅作用推断档**：fact / experience 不衰减；observation 按事实处理（被 consolidation 吸收＝已确认）。
+- **上下文自动压缩阈值高**：生产默认阈值 ≈163k tokens，正常演示不会自然触发；看效果请用 `/compact`。
 
 ## 5. 故障排查
 

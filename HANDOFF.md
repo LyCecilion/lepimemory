@@ -83,6 +83,11 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   - **③ 遗忘子集选择**：`forget` 两段式（缺省 `ids` → 只返回候选计划；带 `ids` → 审批后**只抑制选中项**）。证据 `memory-forget.md`。
   - **④ 状态面板**（`lib/panel.js` + `client.js` + `package.json`）：`conversation.input.dock` 上实时显示状态（自定义路由 `/lepimemory/state` + 本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）；另有 **`/lepimemory/history` 历史账本分页**（审计/召回/写入/遗忘/行动，最新在前、可翻页）。证据 `state-panel.md`。
   - 另：模型端点已切到 **geek-tech-club**（仅**本机常驻 profile**；仓库草稿保持「不默认启用」——避免个人端点入库，也避免全新 clone 未设 `LEPI_LLM_BASE_URL` 时把 GEEK key 发到官方端点）。
+- ✅ **Phase 4：补齐 Lv1/Lv2 剩余缺口（2026-10-03，`develop`）**：
+  - **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（必须落在 preset 的 `isolate` realm；旧稿「compaction 暂禁」的顾虑被调研推翻）。证据 `docs/research/artifacts/context-management.md`。
+  - **记忆更新 / 冲突（Lv2）**：读路径 recall 带 `prefer_observations`（冲突**取最新**＝Hindsight observation supersede）；`recall.jsonl` 记 `type`/`trust`/`superseded`。证据 `memory-update-trust.md`。
+  - **三档信任 + 差异化衰减（Lv2）**：`lib/trust.js`（fact / experience / **inference 半衰期 14 天**）+ `metadata.trust` + **`remember` 工具**（角色主动记推断）。证据同上。
+  - 本机常驻 profile `~/.dsh/profiles/lepimemory/cordis.patch.yml` 已同步压缩段（保留本机端点覆盖）。
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。

@@ -49,6 +49,14 @@
 | 20 | （本会话，`develop`） | **状态面板**：`lib/panel.js` 路由 + `client.js` 面板 + `package.json` `dsh.client`；**+ `/lepimemory/history` 历史分页（审计/召回/写入/遗忘/行动，可翻页）**；证据 `state-panel.md` |
 | 21 | （本会话，`develop`） | **模型端点切 geek-tech-club**（本机常驻 profile；仓库草稿保持 opt-in，见 §2.2 #19）；`develop` 分支建立（`main` 并入 `exp/state-persistence`） |
 
+### Phase 4（补齐 Lv1/Lv2 剩余缺口；`develop`）
+
+| # | 提交 | 事项 |
+| --- | --- | --- |
+| 22 | （本会话） | **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（preset 的 `isolate` realm）。推翻旧稿「compaction 暂禁」的顾虑。证据 `context-management.md` |
+| 23 | （本会话） | **记忆更新/冲突（Lv2）**：recall 带 `prefer_observations`（冲突**取最新**＝Hindsight observation supersede）；`recall.jsonl` 记 `type`/`trust`/`superseded`。证据 `memory-update-trust.md` |
+| 24 | （本会话） | **三档信任 + 差异化衰减（Lv2）**：`lib/trust.js`（fact/experience/**inference 半衰期 14 天**）+ `metadata.trust` + **`remember` 工具**（角色主动记推断）。证据 `memory-update-trust.md` |
+
 ---
 
 ## 2. 踩坑台账（可复用）
@@ -129,6 +137,25 @@
 15. **浏览器自动化脆弱** `[经验]`
     现象：欢迎弹窗挡点击、ARIA ref 每次快照重编号、`tab.run` 里 `document` 未定义（要用 `page.evaluate`）。
     处置：优先 `page.evaluate` 找按钮/聚焦 + `page.keyboard`；跨会话冒烟是**加分项**、别在上面耗轮次（结构性判据足够）。
+
+### 2.6 上下文 / 记忆更新类（Phase 4）
+
+20. **preset 挂压缩服务必须放进 `isolate` realm** `[已修]`
+    现象：把 `compaction-basic` / `tool-result-pruner` 直接列进 preset 的 `plugins`，建会话报
+    `agent-preset/invalid: Preset services require isolate realms: compaction, toolResultPruner`。
+    根因：preset registry 拒绝把服务发布到 root realm（`packages/preset/agent-preset-registry/src/mount.ts:267`）；
+    web-app 已把 host 面这几行 `disabled`，压缩后端本应由 preset 拥有、且必须走 `isolate`。
+    处置：照上游 standard preset，用 `cordis:group` + `isolate: { compaction, toolResultPruner }` 包住三行。见 `artifacts/context-management.md` §4。
+21. **Hindsight 抽取按「用户视角」读内容** `[已规避]`
+    现象：角色写「我猜她压力大」被抽取重写成「**用户**猜测她压力大」。
+    根因：retain 语义默认「用户告诉 agent 的事实」，无角色名时第一人称被当成用户的话。
+    处置：`remember` 用**角色名成句**（「蝶忆觉得…」）→ 抽取忠实（实测输出「这是蝶忆的推断」）。
+22. **`metadata` 在 observation 上丢失、`tags` 保留** `[已核对]`
+    现象：原始 world/experience 单位带 `metadata.trust`；consolidation 产出的 observation `metadata` 为空但**继承 tags**。
+    处置：语义上不依赖它——observation＝已确认的当前版本 → 按 fact 处理（不衰减）；信任档只对原始推断单位生效。
+23. **`prefer_observations` 对遗忘的取候选要关掉** `[已核对]`
+    现象：`forget` 取候选若也 `prefer_observations`，会看不到被观察覆盖的原始事实 → 抑制不完整。
+    处置：读路径 `true`、`forget` 内部召回 `false`（并在 `attribute` 用 `applyDecay:false` 免误杀）。
 
 ---
 
