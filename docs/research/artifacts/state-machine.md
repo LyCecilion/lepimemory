@@ -1,7 +1,7 @@
-# Phase 3 状态机 v1 证据 — 事件驱动 + 衰减 + 自有审计
+# Phase 3 状态机证据（v1 → v2）— 事件驱动 + 衰减 + 自有审计 + 量级标定
 
-- 日期：2026-09-29
-- 分支：`exp/state-persistence`
+- 日期：2026-09-29（v2 标定与规则定稿：2026-10-03）
+- 分支：`exp/state-persistence`（2026-10-03 并入 `develop` → `main`）
 - 插件：`@dsh-external/dsh-lepimemory-state`（`lib/index.js` 装配；`lib/state.js` schema/渲染/读写；`lib/machine.js` 状态机）
 - 机制：订阅 `session/event`，在 `turn/end` 收尾时把本轮**结构事实**折算成状态增量 + 心境衰减，写 `state.json` 并追加 `audit.jsonl`。
 - 本文件只记结论与实测输出（合成数据）。
@@ -34,7 +34,7 @@
 
 `turn/start` 建账 → `user/message`（仅 `source.kind==='user'` 计数）/ `tool/result`（仅 `isError`）累加 → `turn/end` 结算。
 
-## 模块级模拟（harness，`/tmp/lep-machine-test.mjs`）
+## 模块级模拟（harness，`/tmp/lep-machine-test.mjs`；**v1 快照**，量级见上「v2 标定」）
 
 | 场景 | 结果 |
 | --- | --- |

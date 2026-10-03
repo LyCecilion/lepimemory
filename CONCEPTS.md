@@ -394,23 +394,23 @@ pnpm dsh --profile lepimemory           → dsh 本地跑，加载自研插件
 - [ ] dsh profile 定义（模型接入 + 按 row id 裁剪编码向工具）
 - [ ] 最小 Host 插件包（可加载、可看到效果）
 - [ ] Hindsight 跑起来（单机），bank 建好，`retain_mission` 配好
-- [x] 竖切（读路径）：一次交互 → `recall` → 归因筛选 → 注入（`form:'recall'`）→ 自研审计（写路径 `retain` 待接）
+- [x] 竖切（读路径）：一次交互 → `recall` → 归因筛选 → 注入（`form:'recall'`）→ 自研审计（写路径 `retain` 已接）
 - [ ] 最小审计面板：能看到「这句话被哪条记忆驱动」
 
 ### Phase 2 — Lv1 完整
 
 - [x] 人格状态机（显式状态 + 规则 + 衰减 + 持久化）
 - [x] persona 注入（正式人设文本 + 动态状态快照）
-- [ ] 状态审计（插件自有 `audit.jsonl`：前值→后值 + 命中规则）+ 状态面板
+- [x] 状态审计（插件自有 `audit.jsonl`：前值→后值 + 命中规则）+ 状态面板（`client.js` + `/lepimemory/state` 路由，实时显示）
 - [ ] 上下文管理策略（长历史的压缩/筛选，可用 dsh `compaction` 或自研）
 
 ### Phase 3 — Lv2 完整
 
-- [x] 记忆写路径 v1（不写/寒暄跳过 + 用户陈述→`retain` concise + `trust:fact` 标签；experience/推断待接）
+- [x] 记忆写路径 v1（不写/寒暄跳过 + 用户陈述→`retain` concise + `trust:fact` 标签；**experience 档已接**：角色成功动作→`origin:character-action`；推断待接）
 - [ ] 事实·推断·经历的信任等级与衰减策略
-- [x] 遗忘 v1（`忘掉 X` → 计划预览 → 普通消息确认 → `invalidate`，可撤销）；冲突 supersede 走 Hindsight 原生
-- [ ] 归因筛选（含排除理由）与自研归因审计（复用 `tool/result` + 自有持久化）
-- [ ] 行动能力：至少一类真实副作用操作 + 审批 + 失败影响状态
+- [x] 遗忘（工具化：`forget` 两段式「候选计划 → `ctx.approval` → `invalidate`」，支持子集/单条；`restore_memory` 撤销）；冲突 supersede 走 Hindsight 原生
+- [x] 归因筛选（含排除理由）与自研归因审计（`recall.jsonl`：候选/入选/排除理由；复用 `tool/result` + 自有持久化）
+- [x] 行动能力：至少一类真实副作用操作 + 审批 + 失败影响状态（`write_note` → 真实落盘 `<DSH_HOME>/lepimemory/notes/`；`ctx.approval`；失败→`tool.failure.dampen`）
 - [ ] 审计与回放（双档：完整事件流 / 人可读归因）
 
 ### Phase 4 — Lv3 状态外化

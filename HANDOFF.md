@@ -93,16 +93,16 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   详见 `docs/research/dsh-findings.md` §2.13–2.14。
 - ✅ **状态机 v1 完成**（2026-09-29）：订阅 `session/event`，`turn/end` 收尾时按**数据化规则**推进状态
   （`lib/machine.js`）+ 心境 6h 半衰期衰减，写 `state.json` 并追加 `audit.jsonl`（前值→后值 + 命中规则）。
-  证据 `docs/research/artifacts/state-machine.md`。**待办**：规则集扩充与量级实测（单轮增量低于渲染阈值）。
+  证据 `docs/research/artifacts/state-machine.md`。**✅ 规则集与量级已由 2026-10-03 标定落地**（v2 三条，单次行动成功/失败一轮可见）。
 - ✅ **正式人设注入**（2026-09-29）：preset `persona` 行换正式文本（身份内核 / 说话方式 / 边界），
   经 persona 包注册为 agent 作用域 prefix（suffix 空=遮蔽全局后缀）。实机 A/B：不再自称 AI，也无「工作目录 / 跑命令」泄漏。
   证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
 - ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)` → 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
-  实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
+  实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**✅ `retain` 写路径已接（见下）。**
 - ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
-  实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**待续**：experience/推断档。
+  实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**✅ experience 档已接（见下）；推断待接。**
 - ✅ **遗忘 + 恢复（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`；对称 **`restore_memory`** 工具撤销（ids 从 `forget.jsonl` 读回）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
-  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；再说「恢复团子」→ 审批 → 团子回到 2 命中。审计 `forget.jsonl`（forget/restore）+ `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具带 `ids` 支持子集选择。
+  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；再说「恢复团子」→ 审批 → 团子回到 2 命中。审计 `forget.jsonl`（forget/restore）+ `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**✅ 已加 `ids` 子集（两段式，见下）。**
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
@@ -181,7 +181,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 ### P2 仍开着的两个旧待办
 
 1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
-2. ✅ `docs/DEMO.md` 已定稿（2026-09-29）：5 步剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
+2. ✅ `docs/DEMO.md` 已定稿（2026-09-29；2026-10-03 扩到 6 步）：6 步剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
 
 ### P3 Advisor 三项复核收尾（2026-09-29，已完成）
 
