@@ -19,7 +19,10 @@ make dev                 # 首次启动请等待 1–2 分钟（Hindsight 经 hf
 
 ```bash
 tail -f .dsh/lepimemory/recall.jsonl    # 每轮召回：候选/入选/排除理由
-tail -f .dsh/lepimemory/retain.jsonl    # 每轮写入：写了什么 / 跳过 / 失败
+tail -f .dsh/lepimemory/retain.jsonl    # 每轮写入：写了什么 / 跳过 / 失败 / 经历（origin:character-action）
+tail -f .dsh/lepimemory/action.jsonl     # 行动工具：写了哪个便条文件
+tail -f .dsh/lepimemory/forget.jsonl     # 遗忘/恢复：抑制/恢复了哪些 id、结果
+ls      .dsh/lepimemory/notes/           # write_note 真实落盘的便条
 cat     .dsh/lepimemory/state.json       # 当前状态（数值 + reasons）
 tail -f .dsh/lepimemory/audit.jsonl      # 状态变更：前值→后值 + 命中规则
 ```
@@ -60,14 +63,21 @@ tail -f .dsh/lepimemory/audit.jsonl      # 状态变更：前值→后值 + 命�
 
 > 状态渲染**不出现数值**：它把偏离最大的至多 3 项 + 原因 + 行为倾向写进提示词（见 Trajectory 里的「【内部状态…】」段）。
 
-### 步骤 E — 遗忘（工具 + 审批，已可演示）＋ 真实行动（待实现）
+### 步骤 E — 遗忘（工具 + 审批）＋ 真实行动（已可演示）
 - **遗忘**：说 **「忘掉团子」** →
-  1. 模型**调用 `forget` 工具**；界面弹出**审批卡**（含将抑制的条目，如「Suppress N memories about "团子" (reversible).」）；
-  2. 点 **Allow once** → 执行（底层 `invalidate`）；点 **Reject** → 不执行。
+  1. 模型先调 **`forget`（不带 ids）**：列出候选清单（**不弹审批**），问你只忘哪几条；
+  2. 你选好后，模型再调 **`forget`（带 ids）** → 弹出**审批卡**（如「Suppress N memories about "团子" (reversible).」）→ 点 **Allow once** 才执行（底层 `invalidate`；**只抑制选中的 id**，不动其他）。
   3. **反悔**：说 **「恢复团子」** → 模型调用 **`restore_memory`** → 审批 → 允许 → 记忆回来。
 - 落点：`forget.jsonl`（`forget` / `restore`）+ **`approval/asked` / `approval/decided`**；`:9999` 里该条在 invalidated / valid 间切换。
-- 设计要点：**确认前不会声称已经忘记**；只切与目标相关的记忆，避免误伤（已实测：忘「团子」不动「香菜」）。
-- **真实行动**：产生**真实副作用**（非「我帮你记下了」）+ 审批 + 失败影响状态 —— **待实现**（见 §4）。
+- 设计要点：**确认前不会声称已经忘记**；只切与目标相关的记忆，避免误伤（已实测：只抑制选中的那条，其余保持 `valid`）。
+- **真实行动**：说 **「帮我写张便条：明天买菜」** → 模型调用 **`write_note`** → 审批卡（`Write a note titled "…"`）→ 允许 → **真实落盘** `.dsh/lepimemory/notes/明天买菜.md`。
+  - 落点：`action.jsonl`（写了哪个文件）；成功让状态上扬（`audit.jsonl` 命中 `action.success.brighten`）；`retain.jsonl` 追加一条 `origin:character-action` 的**经历**。
+  - **失败也进状态**：写不进去（如目录只读）→ 工具报 `isError` → `audit.jsonl` 命中 `tool.failure.dampen`、心境下降。
+
+### 步骤 F — 状态面板（实时可见）
+- composer 上方有一条**状态面板**，实时显示当前状态（读宿主的 `/lepimemory/state`）：一行摘要（`心境 v/a · 信任 t · 时间`）+ 渲染文本（如「心境: 比平常略轻快 / 原因: 刚刚帮你把事办成了。」）。
+- 每 5s 自动刷新：聊几句 / 办成一件事 / 写失败 → 面板随轮次变化（对应 `audit.jsonl`）。
+- 想看原始数值：`cat .dsh/lepimemory/state.json`（面板口径与之一致；面板不显示数值、状态段也不显示）。
 
 ## 3. 审计要能回答的问题（题目口径）
 
@@ -81,13 +91,13 @@ tail -f .dsh/lepimemory/audit.jsonl      # 状态变更：前值→后值 + 命�
 
 ## 4. 现状与未实现（诚实清单）
 
-已可演示：**人设注入**、**状态持久化 + 事件驱动状态机（含衰减）**、**记忆读写闭环（recall/retain）**、**遗忘（计划预览→确认→可撤销）**、**自有审计**。
+已可演示：**人设注入**、**状态持久化 + 事件驱动状态机（含心境衰减与量级标定）**、**记忆读写闭环（recall/retain）**、**遗忘（工具 + 审批，支持子集/单条）与恢复**、**真实行动工具 `write_note`（审批 + experience + 失败进状态）**、**状态面板（client 插件）**、**自有审计**。
 
 **未实现（roadmap）**：
-- **真实行动工具** + 审批（步骤 E 下半）——当前 preset 未挂行动工具；写路径也尚未收「经历（experience）」档。
-- **遗忘工具化**（让用户可选子集）+ `ctx.approval`。
-- **状态面板**（把 `state.json`/`audit.jsonl` 做成前端卡）。
-- 规则集与量级仍在标定（单轮状态增量低于渲染阈值，需多轮或调参才「看得见」）。
+- **面板只显示当前值**：`audit.jsonl` / `recall.jsonl` 的历史分页未做（需 Remote 或带 query 的路由）。
+- **规则集仍精简**：三条（熟悉度 / 行动成功 / 工具失败）+ 心境 6h 半衰期衰减；更细的关系 / 情绪事件未接。
+- **上下文管理策略**（长历史的压缩 / 筛选）未接（compaction 暂禁）。
+- 事实·推断·经历的**信任等级与衰减策略**未细化。
 
 ## 5. 故障排查
 

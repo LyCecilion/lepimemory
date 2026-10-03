@@ -74,3 +74,4 @@ user/message seq 10 source.kind=lepimemory-recall  form=recall
 - ✅ 「一次交互：用户输入 → recall(trace) → 归因筛选 → 注入 → 回答」闭环跑通；注入**落库可回放**（`user/message` + `form:'recall'`）。
 - ✅ 归因入选/排除有理由；失败可降级、有审计。
 - 待续：`retain` 写路径三层判断；`decision/attribution` 深化；收紧 web fetch 的取舍。
+  **2026-10-03 更新**：`retain` 写路径**已接**（含 experience 档）。

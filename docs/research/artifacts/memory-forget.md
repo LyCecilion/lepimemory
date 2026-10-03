@@ -1,7 +1,7 @@
 # Phase 3 遗忘（forget）—— 证据（工具 + 审批，取代正则）
 
 - 日期：2026-09-29（工具化改造：2026-10-03）
-- 分支：`exp/state-persistence`
+- 分支：`exp/state-persistence`（2026-10-03 并入 `develop` → `main`）
 - 模块：`lib/memory.js`（`forget` 工具）+ `lib/hindsight.js`（`invalidate`/`revert`）
 - 机制：注册 **`forget` 工具**（**由模型调用**：用户要求忘记时，模型决定调它）→ 先 recall 出**将受影响的记忆** → 经 **`ctx.approval`** 做**结构化用户确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（**可 revert**）。
 
