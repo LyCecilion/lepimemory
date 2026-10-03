@@ -99,7 +99,7 @@
 19. **把个人端点默认写进仓库草稿** `[已修]`
     现象：仓库 profile 草稿把默认模型**默认启用**到 `geek-tech-club`，但该 provider 的 `baseURL` 回落官方端点 → 全新 clone 只填 `GEEK_TECH_CLUB_API_KEY`、没填 `LEPI_LLM_BASE_URL` 时，**GEEK 的 key 被发到官方端点**，默认模型直接坏。
     根因：端点地址属个人资产（`.sanitize-patterns` **禁入库**），仓库里给不出正确默认；`PatchOptions.disabled` 是 `boolean|null`，**不支持 `!!js` 条件**，做不成「有 env 才启用」。
-    处置：**仓库草稿保持 opt-in（默认注释、不启用）**；个人端点只落在**本机常驻 profile**。已核对 `.env.example`「留空→回落官方端点」的既有语义不变。
+    处置：**仓库草稿保持 opt-in（默认注释、不启用）**；个人端点只落在**本机**——且放**不被 `install-profile` 覆盖的 `--patch` 层**（`~/.dsh/lepimemory-machine.patch.yml`，启动加 `--patch`），而非可被 `cp -Rf` 覆盖的 `~/.dsh/profiles/lepimemory/cordis.patch.yml`。已核对 `.env.example`「留空→回落官方端点」的既有语义不变。
 
 ### 2.3 记忆服务（Hindsight）类
 8. **retain 的 3s 预算 → 假报 degraded** `[已修]`

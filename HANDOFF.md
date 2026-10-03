@@ -459,6 +459,12 @@ grep -rniEf .sanitize-patterns --exclude-dir=.git --exclude-dir=.dsh --exclude=.
     （user patch 层官方支持 `process.env` 引用；已实测：合法表达式启动零错误，
     非法表达式启动即 `SyntaxError` 快速失败——写错不会静默）
     留空时回落 `https://api.deepseek.com/v1`
+- **本机把默认模型切到 geek 端点**：仓库草稿保持 **opt-in**（端点不入库）。本机覆盖放在
+  `~/.dsh/lepimemory-machine.patch.yml`（**不在仓库**，`make install-profile` 的 `cp -Rf` 只覆盖仓库里有的文件，碰不到它），
+  启动时叠加：`dsh --profile lepimemory --patch ~/.dsh/lepimemory-machine.patch.yml`。
+  ⚠️ **clobber 陷阱**：若在 `DSH_HOME=~/.dsh` 重跑 `make install-profile`，`~/.dsh/profiles/lepimemory/cordis.patch.yml`
+  会被仓库草稿覆盖（回到 opt-in）；此时**不加 `--patch` 就回落官方端点**。自查：`dsh --profile lepimemory --dump-config | grep -A4 agent-default-model`。
+  （`web` profile —— 常驻 `dsh.service` —— **不**由 install-profile 同步，已在 `~/.dsh/profiles/web/cordis.patch.yml` 切 geek。）
 
 ### 已清理（2026-09-28）
 
