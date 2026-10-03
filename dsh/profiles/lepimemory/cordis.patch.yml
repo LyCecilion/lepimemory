@@ -51,8 +51,11 @@
 # 说明：
 #   - 编码向能力（fs / 终端 / skills / 计划 / 待办 / 子代理等）一律不挂；
 #   - 「行动」工具留给自研插件（显式、可审计），不放开通用 shell；
-#   - 压缩（compaction）先禁用：避免把注入的记忆内容摘要掉（Phase 1 预判坑，
-#     接管方案见 CONCEPTS Phase 2「上下文管理策略」）。
+#   - 上下文管理（Lv1）：启用 dsh 的压缩后端（见 plugins 列表）。旧稿曾「先禁用」以防注入的
+#     记忆被摘要掉——2026-10-03 调研推翻该顾虑：① 状态段在 system/message 节点 0，**永不**被压
+#     （region.ts 只从第一个非 system 节点起选）；② recall 注入是普通 user 消息，滑出保留尾部会被
+#     摘要，但我们**每轮重新召回注入**、且 Hindsight 才是记忆真源，被压的旧 recall 只是冗余副本。
+#     故按上游推荐启用，并配 pruner 先裁超长工具输出。
 - insert:
     - id: preset-lepimemory
       name: "@deepseek-ai/dsh-agent-preset"
@@ -92,9 +95,24 @@
             config:
               fetch: true
               searchTimeoutMs: 60000
-          - id: compaction-basic
-            name: "@deepseek-ai/dsh-compaction-basic"
-            disabled: true # 先禁用（见上）；接管或替换后启用
+          # ── 上下文管理（Lv1）：保留 / 压缩 / 筛选 / 重组 ──────────────
+          # 压缩服务必须落在 preset 的 **isolate realm** 里，否则 registry 拒绝挂载
+          # （"Preset services require isolate realms: compaction, toolResultPruner"）。
+          # 写法照上游 web-app 的 standard preset（`cordis:group` + `isolate`）。
+          # pruner 先做确定性裁剪（超长工具输出），压不动才真调 LLM 摘要；/compact 可手动压一次。
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: "@deepseek-ai/dsh-compaction-basic"
+              - id: command-compact
+                name: "@deepseek-ai/dsh-command-compact"
+              - id: tool-result-pruner
+                name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
           # 行动工具（自研）后续挂在这里或由插件注册，见 docs/research/dsh-findings.md §6。
 
 # ── 3) 默认 preset：会话创建时默认用 lepimemory ──────────────────
