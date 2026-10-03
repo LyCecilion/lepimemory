@@ -29,6 +29,15 @@ ctx.tools.register({
 - **确认**：`ctx.get('approval').request({ agent: exec.agent, toolName:'forget', callId: exec.callId, reason, displayReason:{zh,en}, signal: exec.signal })` → `allowed-once | rejected | cancelled | unavailable`；**非 `allowed-once` 一律不执行**（fail-closed）。
 - `displayReason` 带「将抑制 N 条：<列表>」，审批卡直接展示计划。
 
+## 恢复工具 `restore_memory`（与 forget 对称）
+
+承诺「可恢复」就必须有**入口**（否则模型只能口头假装）。故注册对称工具：
+
+- 从自有审计 `forget.jsonl` **读回**「该目标被抑制过」的 ids → `ctx.approval.request`（同 forget）→ 同意才 `client.revert(id)`（`PATCH state=valid`）。
+- outcome：`no-record` / `unavailable` / `rejected` / `cancelled` / `allowed-once`；审计写 `{"type":"restore",…}`。
+
+实测：说「恢复团子」→ 审批卡 **「Restore 1 suppressed memories about "团子". / Allow once」** → 点允许 → `recall("团子")` 回到 **2 命中**。
+
 ## 实测（web `lepimemory` profile）
 
 1. **工具可见**：会话 `request/header.tools` = `['ask_user_question','forget','web_fetch','web_search']`。
@@ -42,6 +51,7 @@ forget.jsonl     {"type":"forget","tool":"forget","target":"团子","planned":1,
 ```
 
 4. 效果：`recall("团子")` → **0 命中**；`recall("香菜")` → **2 命中**（未误伤）。
+5. **恢复**：说「恢复团子」→ `approval/asked{toolName:"restore_memory"}` → Allow once → `forget.jsonl` 追加 `{"type":"restore","restored":1,…}` → `recall("团子")` 回到 **2 命中**。
 
 ## 工具化过程中踩的坑（已修）
 

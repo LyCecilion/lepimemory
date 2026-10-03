@@ -63,8 +63,9 @@ tail -f .dsh/lepimemory/audit.jsonl      # 状态变更：前值→后值 + 命�
 ### 步骤 E — 遗忘（工具 + 审批，已可演示）＋ 真实行动（待实现）
 - **遗忘**：说 **「忘掉团子」** →
   1. 模型**调用 `forget` 工具**；界面弹出**审批卡**（含将抑制的条目，如「Suppress N memories about "团子" (reversible).」）；
-  2. 点 **Allow once** → 执行（底层 `invalidate`，**可撤销**）；点 **Reject** → 不执行。
-- 落点：`forget.jsonl` + **`approval/asked` / `approval/decided`**；`:9999` 里该条转 `invalidated`。
+  2. 点 **Allow once** → 执行（底层 `invalidate`）；点 **Reject** → 不执行。
+  3. **反悔**：说 **「恢复团子」** → 模型调用 **`restore_memory`** → 审批 → 允许 → 记忆回来。
+- 落点：`forget.jsonl`（`forget` / `restore`）+ **`approval/asked` / `approval/decided`**；`:9999` 里该条在 invalidated / valid 间切换。
 - 设计要点：**确认前不会声称已经忘记**；只切与目标相关的记忆，避免误伤（已实测：忘「团子」不动「香菜」）。
 - **真实行动**：产生**真实副作用**（非「我帮你记下了」）+ 审批 + 失败影响状态 —— **待实现**（见 §4）。
 

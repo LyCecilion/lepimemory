@@ -19,6 +19,8 @@ const RECALL_KIND = "lepimemory-recall";
 
 /** 遗忘工具名（模型可见）。 */
 const FORGET_TOOL = "forget";
+/** 恢复工具名（与 forget 对称：撤销抑制）。 */
+const RESTORE_TOOL = "restore_memory";
 
 function auditFileFor(stateFile, name) {
     return path.join(path.dirname(stateFile), name);
@@ -79,6 +81,24 @@ function renderForget(value) {
             return `遗忘已执行：抑制了 ${value.executed}/${value.planned} 条关于「${value.target}」的记忆（可撤销，用户反悔时可恢复）。\n${list}`;
         default:
             return `遗忘处理完毕（outcome=${value.outcome}）。`;
+    }
+}
+
+/** 把恢复工具结果渲染成模型可见文本。 */
+function renderRestore(value) {
+    switch (value.outcome) {
+        case "no-record":
+            return `没有关于「${value.target}」的遗忘记录，无需恢复。`;
+        case "unavailable":
+            return `找到了 ${value.planned} 条可恢复记忆，但**没有可用的确认通道**，未恢复。`;
+        case "rejected":
+            return `用户**拒绝**了这次恢复，未执行。`;
+        case "cancelled":
+            return `恢复请求被取消，未执行。`;
+        case "allowed-once":
+            return `已恢复 ${value.restored}/${value.planned} 条关于「${value.target}」的记忆。`;
+        default:
+            return `恢复处理完毕（outcome=${value.outcome}）。`;
     }
 }
 
@@ -241,6 +261,89 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                     },
                 }),
             "lepimemory.forget()",
+        );
+
+        // 与 forget 对称：恢复（撤销抑制）。ids 从 forget.jsonl 读回。
+        ctx.effect(
+            () =>
+                ctx.tools.register({
+                    name: RESTORE_TOOL,
+                    description:
+                        "把之前被「忘掉/抑制」的记忆**恢复**回来（撤销遗忘）。当用户表示反悔、要求恢复某人/某事时调用。",
+                    parameters: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: { target: { type: "string", description: "要恢复的对象（人名 / 事物 / 说法）" } },
+                        required: ["target"],
+                    },
+                    output: {
+                        schema: {
+                            type: "object",
+                            additionalProperties: false,
+                            properties: {
+                                target: { type: "string" },
+                                planned: { type: "number" },
+                                restored: { type: "number" },
+                                outcome: { type: "string" },
+                            },
+                            required: ["target", "planned", "restored", "outcome"],
+                        },
+                        render: (_args, value) => [{ type: "text", text: renderRestore(value) }],
+                    },
+                    execute: async (args, exec) => {
+                        const target = String(args?.target ?? "").trim();
+                        if (!target) throw new Error(`${RESTORE_TOOL} 需要非空的 target`);
+
+                        // 从自有审计里读回「该目标被抑制过」的 ids。
+                        let entries = [];
+                        try {
+                            entries = fs.readFileSync(forgetAudit, "utf8").split("\n").filter(Boolean)
+                                .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                        } catch {
+                            /* 无审计文件 */
+                        }
+                        const ids = new Set();
+                        for (const e of entries) {
+                            if (e.type !== "forget") continue;
+                            if (!e.target || !String(e.target).includes(target)) continue;
+                            if (!(e.outcome === "allowed-once" || e.executed > 0)) continue;
+                            for (const id of e.ids ?? []) ids.add(id);
+                        }
+                        const list = [...ids];
+                        if (list.length === 0) return { target, planned: 0, restored: 0, outcome: "no-record" };
+
+                        const approver = ctx.get ? ctx.get("approval") : undefined;
+                        if (!approver) return { target, planned: list.length, restored: 0, outcome: "unavailable" };
+                        const outcome = await approver.request({
+                            agent: exec.agent,
+                            toolName: RESTORE_TOOL,
+                            callId: exec.callId,
+                            reason: `恢复 ${list.length} 条关于「${target}」的记忆`,
+                            displayReason: {
+                                zh: `恢复 ${list.length} 条关于「${target}」的被抑制记忆`,
+                                en: `Restore ${list.length} suppressed memories about "${target}".`,
+                            },
+                            ...(exec.signal ? { signal: exec.signal } : {}),
+                        });
+                        if (outcome !== "allowed-once") return { target, planned: list.length, restored: 0, outcome };
+
+                        let done = 0;
+                        for (const id of list) {
+                            try {
+                                await client.revert(id, { signal: exec.signal });
+                                done += 1;
+                            } catch {
+                                /* 单条失败不中断 */
+                            }
+                        }
+                        appendAudit(forgetAudit, {
+                            type: "restore", at: new Date().toISOString(), tool: RESTORE_TOOL, target,
+                            planned: list.length, restored: done, outcome, ids: list,
+                        }, logger);
+                        return { target, planned: list.length, restored: done, outcome };
+                    },
+                }),
+            "lepimemory.restore()",
         );
     }
 

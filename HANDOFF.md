@@ -96,8 +96,8 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
 - ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
   实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**待续**：experience/推断档。
-- ✅ **遗忘（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`（可 revert）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
-  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；审计 `forget.jsonl` + `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具带 `ids` 支持子集选择。
+- ✅ **遗忘 + 恢复（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`；对称 **`restore_memory`** 工具撤销（ids 从 `forget.jsonl` 读回）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
+  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；再说「恢复团子」→ 审批 → 团子回到 2 命中。审计 `forget.jsonl`（forget/restore）+ `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具带 `ids` 支持子集选择。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
