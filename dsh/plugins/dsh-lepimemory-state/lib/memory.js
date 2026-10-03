@@ -1,11 +1,15 @@
 /**
- * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）+ 遗忘工具（forget）。
+ * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）+ 遗忘工具（forget）+ 推断工具（remember）。
  *
- * 读路径：`agent/pre-step` → `await` Hindsight `recall(trace)` → 归因 → 注入 `source:{kind,form:'recall'}` 的 user 消息。
- * 写路径：`session/event` 收尾 → 写入判断（长度/疑问/请求/寒暄 + 去重）→ `retain`（concise 抽取）。
+ * 读路径：`agent/pre-step` → `await` Hindsight `recall(trace, prefer_observations)` → 归因（含**信任档衰减**）
+ *         → 注入 `source:{kind,form:'recall'}` 的 user 消息。`prefer_observations` 让冲突**取最新**
+ *         （Hindsight 的 observation supersede 原始事实）。
+ * 写路径：`session/event` 收尾 → 写入判断（长度/疑问/请求/寒暄 + 去重）→ `retain`（concise 抽取）；
+ *         按**信任档**写 `metadata.trust`：`fact`（用户明说）/ `experience`（行动成功）/ `inference`（`remember` 工具）。
  * 遗忘：注册 `forget` **工具**（由模型调用）——先 recall 出**将受影响的记忆**，再经 `ctx.approval`
  *       做**结构化用户确认**（fail-closed、落 `approval/asked`+`decided`），同意才 `invalidate`（可 revert）。
  *       —— **不再对用户消息跑正则**（那是 hacky 且易误伤）。
+ * 推断：注册 `remember` 工具，让角色把**自己推断/察觉到**的印象记进长期记忆（信任档 inference，会衰减）。
  *
  * 一切失败都不阻断对话；全部落自有审计。
  */
@@ -14,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ACTION_TOOLS, toolResultInfo } from "./action.js";
 import { HindsightClient, attribute, renderRecall } from "./hindsight.js";
+import { TRUST } from "./trust.js";
 
 /** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；参考仓内 session-reference 的自定义 kind）。 */
 const RECALL_KIND = "lepimemory-recall";
@@ -22,6 +27,8 @@ const RECALL_KIND = "lepimemory-recall";
 const FORGET_TOOL = "forget";
 /** 恢复工具名（与 forget 对称：撤销抑制）。 */
 const RESTORE_TOOL = "restore_memory";
+/** 推断工具名（角色主动记下自己的推断，信任档 inference）。 */
+const REMEMBER_TOOL = "remember";
 
 function auditFileFor(stateFile, name) {
     return path.join(path.dirname(stateFile), name);
@@ -168,7 +175,8 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             const started = Date.now();
             let response;
             try {
-                response = await client.recall(query, { trace: true, signal });
+                // prefer_observations：冲突时只取 Hindsight 合成的「当前有效版本」，不返回被它取代的旧事实。
+                response = await client.recall(query, { trace: true, signal, preferObservations: true });
             } catch (err) {
                 appendAudit(recallAudit, {
                     type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
@@ -181,8 +189,14 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             appendAudit(recallAudit, {
                 type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
                 candidates: (response?.results ?? []).length,
-                picked: picked.map((m) => ({ id: m.id, text: m.text, semantic: Math.round(m.semantic * 1000) / 1000 })),
-                excluded: excluded.map((m) => ({ id: m.id, reason: m.reason })),
+                picked: picked.map((m) => ({
+                    id: m.id, text: m.text, type: m.type, trust: m.trust,
+                    semantic: Math.round(m.semantic * 1000) / 1000,
+                    decay: Math.round(m.decay * 1000) / 1000,
+                })),
+                excluded: excluded.map((m) => ({ id: m.id, trust: m.trust, reason: m.reason })),
+                // 本轮是否返回了「已更新的综合版本」（原记忆被 observation 取代）
+                superseded: picked.some((m) => m.type === "observation"),
                 ms: Date.now() - started,
             }, logger);
 
@@ -243,7 +257,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                         } catch (err) {
                             throw new Error(`记忆服务不可达，无法生成遗忘计划：${err?.message ?? err}`);
                         }
-                        const { picked } = attribute(response?.results, { minSemantic: 0.3, maxItems: 20 });
+                        const { picked } = attribute(response?.results, { minSemantic: 0.3, maxItems: 20, applyDecay: false });
                         // 朴素 S1 切分：只取**文本确实提到目标**的候选（避免误伤无关片段）。
                         const related = picked.filter((m) => String(m.text ?? "").includes(target));
                         if (related.length === 0) {
@@ -392,6 +406,72 @@ export function installMemory(ctx, config, { logger, stateFile }) {
         );
     }
 
+    // ── 推断工具：角色主动记下「自己察觉到的判断」（信任档 inference，会随时间衰减）──
+    if (retainEnabled && ctx.tools) {
+        ctx.effect(
+            () =>
+                ctx.tools.register({
+                    name: REMEMBER_TOOL,
+                    description:
+                        "把你自己**推断 / 察觉到**的关于对方的印象记进长期记忆——不是你被告知的事实（那些会自动记住），而是你自己拼出来的判断（比如 ta 好像喜欢安静的地方）。当你想留住这样一个印象时调用。content 请以「蝶忆觉得… / 蝶忆注意到…」这样的句子、用名字指代你自己来写。",
+                    parameters: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            content: { type: "string", description: "你要记下的推断（一句话，第一人称）" },
+                            about: { type: "string", description: "关于谁 / 什么（可选）" },
+                        },
+                        required: ["content"],
+                    },
+                    output: {
+                        schema: {
+                            type: "object",
+                            additionalProperties: false,
+                            properties: { content: { type: "string" }, outcome: { type: "string" } },
+                            required: ["content", "outcome"],
+                        },
+                        render: (_args, value) => [
+                            {
+                                type: "text",
+                                text:
+                                    value.outcome === "stored"
+                                        ? `记下了（我的推断）：${value.content}`
+                                        : `没能记下（${value.outcome}）。`,
+                            },
+                        ],
+                    },
+                    execute: async (args, exec) => {
+                        const content = String(args?.content ?? "").trim();
+                        if (!content) throw new Error(`${REMEMBER_TOOL} 需要非空的 content`);
+                        const about = String(args?.about ?? "").trim();
+                        const context = about ? `我的推断（关于${about}）` : "我的推断";
+                        // 用角色名成句：Hindsight 的抽取把「无主语的第一人称」当作**用户**在说话
+                        // （「我猜她…」→「用户猜测她…」）。带上角色名，抽取才忠实（实测：见 memory-*.md）。
+                        const persona = memory.personaName ?? "蝶忆";
+                        const phrased = content.includes(persona) ? content : `${persona}的推断：${content}`;
+                        try {
+                            const res = await client.retain(
+                                [{ content: phrased, context, tags: ["origin:character-inference"], metadata: { trust: TRUST.INFERENCE, origin: "character-inference" } }],
+                                { deadlineMs: 30000, maxRetries: 0, ...(exec.signal ? { signal: exec.signal } : {}) },
+                            );
+                            appendAudit(retainAudit, {
+                                type: "retain", origin: "character-inference", at: new Date().toISOString(),
+                                ok: true, items: res?.items_count, content: phrased,
+                            }, logger);
+                            return { content, outcome: "stored" };
+                        } catch (err) {
+                            appendAudit(retainAudit, {
+                                type: "retain", origin: "character-inference", at: new Date().toISOString(),
+                                degraded: true, error: String(err?.message ?? err), content: phrased,
+                            }, logger);
+                            return { content, outcome: "unavailable" };
+                        }
+                    },
+                }),
+            "lepimemory.remember()",
+        );
+    }
+
     // ── 写路径：本轮用户说的话 → 写入判断 → retain ────────────────────────
     if (retainEnabled) {
         ctx.on("session/event", (session, event) => {
@@ -452,7 +532,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                         if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
                         const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
                         client
-                            .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
+                            .retain([{ content, context: "用户说的话", tags: ["origin:user-turn"], metadata: { trust: TRUST.FACT, origin: "user-turn" } }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
                             .then((res) => appendAudit(retainAudit, {
                                 type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
                                 ok: true, chars: content.length, items: res?.items_count, content,
@@ -471,7 +551,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             for (const action of actions ?? []) {
                 const content = `我写了张便条：${action.title}`;
                 client
-                    .retain([{ content, context: "角色做过的事", tags: ["origin:character-action", "trust:experience"] }], { deadlineMs: 30000, maxRetries: 0 })
+                    .retain([{ content, context: "角色做过的事", tags: ["origin:character-action"], metadata: { trust: TRUST.EXPERIENCE, origin: "character-action" } }], { deadlineMs: 30000, maxRetries: 0 })
                     .then((res) => appendAudit(retainAudit, {
                         type: "retain", origin: "character-action", at: new Date().toISOString(), session: id, turn: event.data?.turn,
                         ok: true, items: res?.items_count, content,
