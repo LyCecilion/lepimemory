@@ -35,7 +35,7 @@ ctx.tools.register({
 ## experience 写路径（`lib/memory.js`）
 
 - 与「用户陈述」的 retain 缓冲并列、互不干扰：`turn/end` 时对每个成功动作
-  `client.retain([{ content:`我写了张便条：${title}`, context:"角色做过的事", tags:["origin:character-action","trust:experience"] }], {deadlineMs:30000, maxRetries:0})`（fire-and-forget），审计 `retain.jsonl` 带 `origin:"character-action"`。
+  `client.retain([{ content:`我写了张便条：${title}`, context:"角色做过的事", tags:["origin:character-action"], metadata:{trust:"experience",origin:"character-action"} }], {deadlineMs:30000, maxRetries:0})`（fire-and-forget），审计 `retain.jsonl` 带 `origin:"character-action"`。
 
 ## 实测（web `lepimemory` profile，bench `DSH_HOME=/tmp/lep-web`）
 

@@ -95,7 +95,7 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 目标 = 「模型接入 + 能力面裁剪」两件事：
 
 1. **模型接入**：`llm-pi-ai.providers` 追加 `geek-tech-club`（`.env`: `GEEK_TECH_CLUB_API_KEY`）；默认模型暂保持 `deepseek-official`；「切换为 .env 端点」的开关以注释形式预留（评委场景建议开启）。**baseURL 亦来自 `.env`（`LEPI_LLM_BASE_URL`，经 `!!js` 读取；已实测：合法表达式启动零错误、非法表达式启动即 `SyntaxError` 快速失败，见根 `HANDOFF.md`「工作区纪律」）。**
-2. **裁剪**：新增 `preset-lepimemory`（persona 正式文本 / tool-ask-user / tool-web / compaction 暂禁），并把 `agent-preset-registry` 默认指向它；编码向工具不挂载；「行动工具」留给自研插件。
+2. **裁剪**：新增 `preset-lepimemory`（persona 正式文本 / tool-ask-user / tool-web / compaction 启用，见 `artifacts/context-management.md`），并把 `agent-preset-registry` 默认指向它；编码向工具不挂载；「行动工具」留给自研插件。
 3. **人设**：preset 的 persona 行按 per-agent 遮蔽部署级「coding agent」文案（无需改全局 `system-prompt`）；**正式人设文本已落地在该行的 `prefix`**（见 `artifacts/persona-injection.md`）。
 
    ⚠️ **persona 遮蔽是必须项，不是美化项**——A/B 实验直接提供了证据：

@@ -11,12 +11,12 @@
 | 层 | 判定 | 落点 |
 | --- | --- | --- |
 | ① 不写 | 过短 / **疑问句**（含 `？`）/ **请求句**（`提醒我…`）/ 寒暄 | 审计记 `skipped` + `reason` |
-| ② experience | ✅ **已接（2026-10-03）**：角色**行动成功**（`write_note`）→ `retain` `content:"我写了张便条：…"`、`tags:["origin:character-action","trust:experience"]` | `retain.jsonl`（`origin:character-action`） |
-| ③ fact / preference | 其余**用户陈述** → `retain`（Hindsight `concise` 负责过滤填充语、抽成事实） | `trust:fact` 标签 |
+| ② experience | ✅ **已接（2026-10-03）**：角色**行动成功**（`write_note`）→ `retain` `content:"我写了张便条：…"`、`tags:["origin:character-action"]` + `metadata.trust="experience"` | `retain.jsonl`（`origin:character-action`） |
+| ③ fact / preference | 其余**用户陈述** → `retain`（Hindsight `concise` 负责过滤填充语、抽成事实） | `metadata.trust="fact"` |
 
-- `tags: ["origin:user-turn", "trust:fact"]` 标来源与信任等级（CONCEPTS §4.2 的「事实/推断/经历」先落 fact 档）。
+- `tags: ["origin:user-turn"]` + `metadata.trust="fact"` 标来源与信任等级（CONCEPTS §4.2 三档；2026-10-03 起 fact / experience / inference **均已接入**，见 `memory-update-trust.md`）。
 - **去重**：同一内容（归一化）不重复 `retain`。
-- **冲突/过期**：走 Hindsight 原生 **observation refine-not-overwrite / supersede**，我们不做特殊处理。
+- **冲突/过期**：走 Hindsight 原生 **observation refine-not-overwrite / supersede**；读路径用 `prefer_observations` **取最新** + 审计 `superseded`（见 `memory-update-trust.md`）。
 
 > ⚠️ **v1.1 修复（实测复现的过度写入）**：初版层①**只按长度**过滤 → 把用户的**提问**也写进了记忆
 > （`{"turn":2,"ok":true,"content":"我下周要见谁来着？提醒我一下。"}`），Hindsight 随即抽出近重复事实 →
@@ -47,12 +47,12 @@
 ## 坑与备注
 
 1. **headless 一次性进程抓不到 fire-and-forget**：进程在 retain 完成前就退出 → 写路径测试须用**常驻服务（web / resident）**。
-2. 写入判断仍是**朴素版**：靠长度门槛 + 交 Hindsight `concise` 抽取；**未**做「模型级推断/经历」判断，也没有「用户确认后写入」的协商。
-3. ✅ experience（角色行动/工具结果）**已接**（2026-10-03，见 `action-tool.md`）；**inference 档未接**——待后续（CONCEPTS §4.2 / §4.4）。
+2. 用户陈述的写入判断仍是**朴素版**：靠长度门槛 + 交 Hindsight `concise` 抽取。「模型级推断」已由独立的 **`remember` 工具**承接（模型主动调用）；「用户确认后写入」的协商仍未做。
+3. ✅ experience（角色行动/工具结果）**已接**（2026-10-03，见 `action-tool.md`）；✅ **inference 档也已接**（2026-10-03，`remember` 工具 + 半衰期 14 天衰减，见 `memory-update-trust.md`）。
 4. 端到端「埋信息 → 换会话 → 被问起」的完整演示，留给 `DEMO.md` 剧本阶段。
 
 ## 结论
 
 - ✅ 写路径闭环：**对话中说的话 → 抽取成长期事实 → 可被后续 recall 命中**；噪声跳过、失败有审计。
-- 待续：experience/推断档、遗忘（用户要求忘记的实际效果）、`DEMO.md` 剧本。
-  **2026-10-03 更新**：experience 档（角色成功动作→`origin:character-action`）、遗忘工具化+审批+子集、`DEMO.md` 剧本**均已落地**；仅**推断档**待接。
+- ~~待续：experience/推断档、遗忘（用户要求忘记的实际效果）、`DEMO.md` 剧本~~ → **均已落地**（见下）。
+  **2026-10-03 更新**：experience 档（角色成功动作→`origin:character-action`）、遗忘工具化+审批+子集、`DEMO.md` 剧本、**inference 档（`remember`）与三档衰减**均已落地。

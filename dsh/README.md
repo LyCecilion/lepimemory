@@ -45,10 +45,12 @@ systemctl --user restart lepimemory-dsh
   经 persona 包注册为 agent 作用域的 persona prefix/suffix（`suffix: ''` = 遮蔽全局后缀，不显示工作目录等）。
   A/B 实测：不再自称 AI/助手，也不再冒「工作目录/跑命令」的编码助手口吻（证据 `docs/research/artifacts/persona-injection.md`）。
   文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
-- **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace)`）→ **归因筛选**（分数阈值 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
-- **记忆写路径（v1.1）**：`turn/end` 收尾时对本轮**用户陈述**做写入判断（过短/**疑问**/**请求**/寒暄跳过 + 内容去重）→ Hindsight `retain`（`concise` 抽取）+ `trust:fact` 标签；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算，retain 非幂等故**不重试**）。**experience 档已接**（角色成功动作 → retain `origin:character-action`）；推断档待接。
+- **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace, prefer_observations)`）→ **归因筛选**（分数阈值 + 信任档衰减 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
+- **记忆写路径（v1.1）**：`turn/end` 收尾时对本轮**用户陈述**做写入判断（过短/**疑问**/**请求**/寒暄跳过 + 内容去重）→ Hindsight `retain`（`concise` 抽取）+ `metadata.trust=fact`；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算，retain 非幂等故**不重试**）。**三档信任均接入**：`fact`（用户明说）/ `experience`（角色成功动作）/ `inference`（**`remember` 工具**，读侧半衰期 14 天衰减，见 `lib/trust.js`）。
 - **遗忘 + 恢复（工具 + 审批）**：注册 **`forget` 工具**（**由模型调用**，不从消息跑正则）→ 先 recall 出受影响记忆 → **`ctx.approval` 结构化确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（S1 检索抑制）；对称的 **`restore_memory` 工具**做撤销（ids 从 `forget.jsonl` 读回，同样经审批）。只切**文本提到目标**的候选；审计 `forget.jsonl`。工具注册在根上下文即可达每个 agent（`request/header.tools` 已实测含二者）。
 - **行动工具 `write_note`**：真实落盘 `<DSH_HOME>/lepimemory/notes/`，经 `ctx.approval` 确认；成功进 experience 写路径（`origin:character-action`）与状态机，失败（抛错→`isError`）进状态（`tool.failure.dampen`）。审计 `action.jsonl`。
 - **状态面板**：`conversation.input.dock` 上的 client 面板（`client.js`，package.json 声明 `dsh.client`）+ 自定义路由 `/lepimemory/state`（本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）+ **`/lepimemory/history` 历史账本分页**（审计/召回/写入/遗忘/行动五类；白名单 kind + limit/offset + 本机信任栅栏；面板可折叠、切标签、翻页）。
-- **待办**：更细的关系/情绪规则；上下文管理策略；事实/推断/经历信任等级细化。
+- **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（preset 的 `isolate` realm；`/compact` 手动压缩）；状态段（system 节点 0）永不被压。见 `docs/research/artifacts/context-management.md`。
+- **记忆更新 / 冲突**：读路径 recall 带 `prefer_observations`（冲突**取最新**）；`recall.jsonl` 记 `type`/`trust`/`superseded`。
+- **待办**：更细的关系/情绪规则；记忆更新的**显式工具**（当前走 Hindsight 原生 supersede）；推断档衰减的长期手感实测。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

@@ -104,8 +104,8 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
 - ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)` → 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
   实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**✅ `retain` 写路径已接（见下）。**
-- ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
-  实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**✅ experience 档已接（见下）；推断待接。**
+- ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `metadata.trust=fact`）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
+  实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**✅ 三档（fact / experience / inference）均已接入（见 Phase 4）。**
 - ✅ **遗忘 + 恢复（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`；对称 **`restore_memory`** 工具撤销（ids 从 `forget.jsonl` 读回）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
   实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；再说「恢复团子」→ 审批 → 团子回到 2 命中。审计 `forget.jsonl`（forget/restore）+ `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**✅ 已加 `ids` 子集（两段式，见下）。**
 
@@ -186,7 +186,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 ### P2 仍开着的两个旧待办
 
 1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
-2. ✅ `docs/DEMO.md` 已定稿（2026-09-29；2026-10-03 扩到 6 步）：6 步剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
+2. ✅ `docs/DEMO.md` 已定稿（2026-09-29；2026-10-03 扩到 **9 步 A–I**）：剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
 
 ### P3 Advisor 三项复核收尾（2026-09-29，已完成）
 
@@ -335,7 +335,7 @@ docker run -it --pull always --name hindsight -p 8888:8888 -p 9999:9999 \
 预判的坑：
 
 - `agent/pre-step` waterfall 的时序，以及能否拿到本轮输入
-- dsh 自带的 `compaction` 可能把我们注入的内容摘要掉 → 需接管或禁用该行
+- ~~dsh 自带的 `compaction` 可能把我们注入的内容摘要掉 → 需接管或禁用该行~~ → **已处置（2026-10-03）**：启用 compaction（状态段在 system 节点 0 永不被压；recall 每轮重注入），见 `docs/research/artifacts/context-management.md`。
 
 ### 阶段 2：Hindsight 单独跑通（1–2 天）
 
