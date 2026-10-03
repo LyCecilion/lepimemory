@@ -123,7 +123,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - 脱敏复查已跑：全仓对照 `.sanitize-patterns` **零残留**；`.env` / `.dsh/` **从未被追踪、历史中从未出现**（`git log --all --name-only` 核验）。
 - 提交已完成：`55d6f86` → `330792a` 共 5 笔，**全部 GPG 签名**（`%G?` 均为 `G`），工作区干净。
 - 排练提交 `6054b74`（未签名）已**并入正式提交重做**，处置完毕；它仍在 reflog 中可达，可作参照，无需清理。
-- 待办：**本地领先 `origin/main`（`51082c0`）5 笔，尚未 push**——push 时机由本人决定。
+- ~~待办：本地领先 `origin/main`（`51082c0`）5 笔，尚未 push~~ → **已于 2026-10-03 处置**：`exp/state-persistence` 经 `develop` 全部推送并合并进 `main`（PR #2 / #3）。
 
 ## 待修清单（2026-09-29，Agent 复核发现，按优先级）
 
@@ -414,13 +414,13 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 | 「关于 A」vs「A 参与」的自动切分 | 当前用「机器候选 + 用户确认」**回避** | `DESIGN_NOTES.md` §2.5 |
 | 情绪的极性冲突（又亲近又防备） | 单标量做不到，需「维度 + 矛盾标记」 | `DESIGN_NOTES.md` §1.7 |
 | 各层上下文的 token 预算 | 需实测 | `DESIGN_NOTES.md` §3.4 |
-| preset 裁剪是配置层还是运行时 | dump 树与 session log 证据矛盾，需再核验写死 | 本文件「Agent 复核」待办 1 |
+| preset 裁剪是配置层还是运行时 | ✅ **已核验**：runtime 根上下文注册的工具**会到每个 agent**；web bundle 是把编码向行 `disabled` 了，不是 preset 挡的 | `docs/DEVLOG.md` §2.2 #7 |
 | 429 退避策略 | ✅ recall 路径已实现：指数退避（1s/2s/4s）+ 降级 + 审计（`lib/hindsight.js`） | 本文件「Agent 复核」待办 2 |
 | 模型可能用 `tool-web.fetch` 直连 Hindsight、**绕过归因** | 已知风险，待评估收紧 `tool-web` fetch | `docs/research/artifacts/memory-recall.md` 备注 2 |
 | ~~遗忘确认/请求匹配过宽~~ | ✅ **已解决**：遗忘改为 **`forget` 工具 + `ctx.approval`**（无消息级正则） | `docs/DEVLOG.md` §2.4 #11 |
-| 遗忘子集不可选（工具一次抑制「与目标相关」的全部候选） | **未修**；需工具带 `ids` | `docs/research/artifacts/memory-forget.md` |
+| ~~遗忘子集不可选（工具一次抑制全部候选）~~ | ✅ **已修**：`forget` 两段式（缺省只回候选计划 → 带 `ids` 只抑制选中项） | `docs/research/artifacts/memory-forget.md` |
 | ~~行动工具可见性未验~~ | ✅ **已证**：runtime 根上下文注册的工具会到每个 agent | `docs/DEVLOG.md` §2.2 #7 |
-| 提交安排（排练提交 6054b74 处置 / 提交粒度 / push 时机） | 待确认 | 本文件「Git 状态备忘」 |
+| 提交安排（排练提交 6054b74 / 提交粒度 / push 时机） | ✅ 已处置：全部签名提交、已推送（`main` 于 2026-10-03 合并 `develop`） | 本文件「Git 状态备忘」 |
 
 ---
 

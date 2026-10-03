@@ -127,4 +127,4 @@ lepimemory-state: 状态字段 "mood.valence" 无效：期望 -1~1 数值，实�
 - 四项验收全部通过：首次写入 / 状态→语气 / 无需重启 / 重启仍在 / 坏 JSON 报错。
 - 「插件能读写跨会话的持久状态」成立；`text` 函数形式（每轮重读）是「无需重启」的机制依据。
 - 遗留（本步不做，Phase 3 后续）：状态**更新规则**（事件驱动状态机）、衰减、`persona/state-diff` 审计事件。
-- 未决/取舍：stock web 无 console exporter（见 §5）；persona 遮蔽未落地（见 §3 注）。
+- 未决/取舍：stock web 无 console exporter（见 §5）；persona 遮蔽**已落地**（2026-09-29，见 `persona-injection.md`）。

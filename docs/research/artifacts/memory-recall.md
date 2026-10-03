@@ -67,7 +67,7 @@ user/message seq 10 source.kind=lepimemory-recall  form=recall
 2. ⚠️ 由此也暴露一个**演示风险**：lepimemory preset 里 `tool-web` 的 `fetch` 开着，模型理论上也能自己去打 API 读记忆、绕过归因。
    → 若要杜绝，需评估收紧 web fetch；当前记为**已知未决**。
 3. 归因仍是**朴素版**（分数阈值）；「情绪门控召回排序」「候选集/排除理由进审计」已具备，调优留后续。
-4. 写路径（`retain`：什么时候/写什么）**尚未接**——本步只做「读」路径。
+4. ✅ 写路径（`retain`：什么时候/写什么）**已接**（2026-10-03，见 `memory-write.md`）；本步只做「读」路径。
 
 ## 结论
 

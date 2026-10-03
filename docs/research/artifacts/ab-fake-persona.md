@@ -27,7 +27,7 @@
 
 > ⚠️ **读状态 B 时请注意**：回复里「在 `/tmp/lepimemory-dsh-tests` 这个工作目录里待命，随时准备帮你跑命令、翻文件、查资料」
 > 是**底座 coding-agent 人设的渗透**，不是目标角色文案。本实验的变量只有状态文本，
-> persona 遮蔽尚未落地（见 `dsh-findings.md` §6.3）。
+> persona 遮蔽**已落地**（2026-09-29，见 `persona-injection.md` / `dsh-findings.md` §6.3）。
 > 结论不变（状态能改语气），但**不要拿状态 B 的措辞当角色文案范例**。
 
 ## 结论
