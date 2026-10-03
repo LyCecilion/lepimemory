@@ -387,3 +387,6 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,linux,macos,python,visualstudiocode,pycharm+all,vim
+
+# omp 工作区元数据（harness 生成，勿提交）
+.omp/

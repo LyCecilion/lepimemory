@@ -2,7 +2,7 @@
     "name": "@dsh-external/dsh-lepimemory-state",
     "version": "0.0.1",
     "private": true,
-    "description": "Lepimemory 最小状态注入插件（Phase 1 实验）：把一个硬编码的状态文本注册为 system prompt section。",
+    "description": "Lepimemory 角色运行时插件：持久化状态 + 事件驱动状态机 + 心境衰减 + 自有审计 + 记忆桥（Hindsight 召回/写入）+ `forget` 遗忘工具（ctx.approval 确认）。",
     "type": "module",
     "main": "./lib/index.js",
     "exports": {

@@ -27,6 +27,7 @@
 | `CHALLENGE.md` | 题目原文 | 不可改 |
 | `CONCEPTS.md` | **已定的架构决策**。改动需明确推翻。 | 高 |
 | `DESIGN_NOTES.md` | **正在形成的判断**，含「未解」与「待验证」 | 中 |
+| `docs/DEVLOG.md` | **开发日志**：工作全过程 + 踩坑台账 + 已知未决 | — |
 | `HANDOFF.md` | 本文件 — 恢复上下文用 | — |
 
 **改动纪律**：如果开工后发现某个假设被推翻，改 `CONCEPTS.md`，**不要硬撑着实现**。
@@ -76,7 +77,27 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步**：竖切闭环（阶段 3，把 recall 接进 dsh）＋ 自研状态机（状态注入接到 `dsh-lepimemory-state` 的 section 上）
+- ⏭️ **下一步**：① 真实行动工具 + 审批（含 experience 档 + 失败影响状态）；② 规则集与量级标定；③ 状态面板（client 插件）
+- ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
+  插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
+  四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。
+  证据：`docs/research/artifacts/state-persistence.md`；profile 的 `state:` 覆盖已删、常驻实例 `~/.dsh/profiles/lepimemory/` 已同步并重启。
+- ⚠️ **审计落点更正（2026-09-29，spike 实测推翻）**：out-of-tree 插件**不能**往 session log 加自定义事件类型——
+  写侧 `Session.append()` 无 `ignorable` 透传，读侧按静态白名单准入，追加即让**整个会话重载被拒**。
+  `CONCEPTS.md §5.3` 已改为「分层落点」：**效果**靠 `system/message` 的 Prompt Diff（可回放），**原因**落**插件自有持久化**。
+  详见 `docs/research/dsh-findings.md` §2.13–2.14。
+- ✅ **状态机 v1 完成**（2026-09-29）：订阅 `session/event`，`turn/end` 收尾时按**数据化规则**推进状态
+  （`lib/machine.js`）+ 心境 6h 半衰期衰减，写 `state.json` 并追加 `audit.jsonl`（前值→后值 + 命中规则）。
+  证据 `docs/research/artifacts/state-machine.md`。**待办**：规则集扩充与量级实测（单轮增量低于渲染阈值）。
+- ✅ **正式人设注入**（2026-09-29）：preset `persona` 行换正式文本（身份内核 / 说话方式 / 边界），
+  经 persona 包注册为 agent 作用域 prefix（suffix 空=遮蔽全局后缀）。实机 A/B：不再自称 AI，也无「工作目录 / 跑命令」泄漏。
+  证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
+- ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)` → 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
+  实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
+- ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
+  实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**待续**：experience/推断档。
+- ✅ **遗忘 + 恢复（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`；对称 **`restore_memory`** 工具撤销（ids 从 `forget.jsonl` 读回）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
+  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；再说「恢复团子」→ 审批 → 团子回到 2 命中。审计 `forget.jsonl`（forget/restore）+ `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具带 `ids` 支持子集选择。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
@@ -155,7 +176,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 ### P2 仍开着的两个旧待办
 
 1. preset 裁剪是配置层还是运行时 —— 用会话日志核验一次，结论写进 `dsh-findings.md` §2.7（见上方「Agent 复核」待办 1）。
-2. `docs/DEMO.md` 仍是骨架草稿（头部注释 + 「待补」），剧本每步的预期现象/解说词要在竖切闭环跑通后补。
+2. ✅ `docs/DEMO.md` 已定稿（2026-09-29）：5 步剧本 + 三个可观测面 + 审计速查 + **诚实未实现清单**。
 
 ### P3 Advisor 三项复核收尾（2026-09-29，已完成）
 
@@ -165,7 +186,7 @@ Advisor 提出可以不用自持常量——插件已 `inject: ["systemPrompt"]`
 
 > 相关 commit（`6b2ae9e` / `ad11b82` / `50caed2`）均已推送；本地与 `origin/main` 一致（`git rev-list --count origin/main..HEAD` = 0）。
 
-## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储
+## 下一步：Phase 3 第一步 —— 状态从硬编码换成持久化存储（✅ 已完成，见上方「当前进度」）
 
 > **分工（2026-09-29）**：本节的**实现、验收、提交由你本人执行**；Agent 已完成全部前置复核，「实现规格」与「验收配方」已按复核结果定稿。
 
@@ -246,6 +267,11 @@ reasons:   []                                                    —— [{ dimen
 **验收（照跑并留证到 `docs/research/artifacts/`）**：
 
 1. **首次启动自动写入**（不需要模型；必须**真启动**——`--dump-config` 只组合、不 mount，验不了这条）：全新 home `make dev DSH_HOME=/tmp/lep-smoke DSH=dsh PORT=3099` → 起来后 `cat /tmp/lep-smoke/lepimemory/state.json` 应为初始状态；Ctrl-C 退出。（web 无人对话 → 无模型调用，正好绕开新 home 没有 `.credentials.yaml`；docker 部分与这条无关，也可 `make install-profile DSH_HOME=…` + 裸 `dsh --profile lepimemory --no-open --port 3099`。）
+   ⚠️ **全新 home 的 link 坑（2026-09-29 实测踩到）**：仓库版 `dsh/profiles/lepimemory/package.json` 用的是
+   相对 `link:../../../dsh/plugins/…`，只有在 `DSH_HOME=<repo>/.dsh` 时三跳才落到 `<repo>/dsh/plugins`；
+   换成 `/tmp/lep-smoke` 等外部 home 会指向不存在的 `/tmp/dsh/plugins/…`。且 cordis 对解析不到的模块
+   **只走 logger、不崩** → 插件静默缺席、不写 `state.json`，看着像实现 bug，实为 link。
+   正确做法：外部 home 用**绝对** `link:<repo>/dsh/plugins/dsh-lepimemory-state`（本步验收即拷常驻 profile 的绝对 link 版本）。
 2. **A/B 语气变化（两类证据分开写）**：
    - ① **状态文件 → 语气**：先写好 `/tmp/leptest/state-a.json`、`state-b.json`（明显对比：如 `valence ±0.6`、`trust 0.9 vs 0.1`），再 `dsh --profile lepimemory-headless --patch <A.yml> "今天过得怎么样？随便聊两句吧。"` / `--patch <B.yml>`——A/B patch 只把该行 `stateFile` 指向对应 /tmp 文件。**全程隔离，不碰 `~/.dsh` 本体**（它是常驻实例的家）。
    - ② **无需重启（直证、加分/演示项）**：`make dev` 起的 web，**同一会话**两轮之间编辑上面的 state 文件 → 下一轮语气变。headless 每次新进程，只证①；别拿它当②。
@@ -358,8 +384,8 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 - [x] `docker-compose.yml`（Hindsight + 健康检查 + 卷）— 草案 v0.1
 - [x] `.env.example`（**绝不提交真 key**）
 - [x] `Makefile`：`make dev` / `make clean` / `make reset` — 草案 v0.1（compose 已装，可完整演练）
-- [x] `README.md`（写清启动时间：「第一次启动请等待 X 分钟」）— 骨架草稿，待定稿
-- [x] `docs/DEMO.md`（评委自助路径 + 演示剧本）— 骨架草稿，待定稿
+- [x] `README.md`（写清启动时间：「第一次启动请等待 X 分钟」）— 已定稿
+- [x] `docs/DEMO.md` — 已定稿（剧本 + 审计落点 + 未实现清单）
 
 演示剧本见 `CONCEPTS.md` §6.5，5 步，第 5 步（遗忘预告）是最能拉开差距的一段。
 
@@ -384,7 +410,11 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 | 情绪的极性冲突（又亲近又防备） | 单标量做不到，需「维度 + 矛盾标记」 | `DESIGN_NOTES.md` §1.7 |
 | 各层上下文的 token 预算 | 需实测 | `DESIGN_NOTES.md` §3.4 |
 | preset 裁剪是配置层还是运行时 | dump 树与 session log 证据矛盾，需再核验写死 | 本文件「Agent 复核」待办 1 |
-| 429 退避策略 | 演示用自有 key 风险低；Phase 3 插件仍需带退避 + 降级 | 本文件「Agent 复核」待办 2 |
+| 429 退避策略 | ✅ recall 路径已实现：指数退避（1s/2s/4s）+ 降级 + 审计（`lib/hindsight.js`） | 本文件「Agent 复核」待办 2 |
+| 模型可能用 `tool-web.fetch` 直连 Hindsight、**绕过归因** | 已知风险，待评估收紧 `tool-web` fetch | `docs/research/artifacts/memory-recall.md` 备注 2 |
+| ~~遗忘确认/请求匹配过宽~~ | ✅ **已解决**：遗忘改为 **`forget` 工具 + `ctx.approval`**（无消息级正则） | `docs/DEVLOG.md` §2.4 #11 |
+| 遗忘子集不可选（工具一次抑制「与目标相关」的全部候选） | **未修**；需工具带 `ids` | `docs/research/artifacts/memory-forget.md` |
+| ~~行动工具可见性未验~~ | ✅ **已证**：runtime 根上下文注册的工具会到每个 agent | `docs/DEVLOG.md` §2.2 #7 |
 | 提交安排（排练提交 6054b74 处置 / 提交粒度 / push 时机） | 待确认 | 本文件「Git 状态备忘」 |
 
 ---
