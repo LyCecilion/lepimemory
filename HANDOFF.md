@@ -77,7 +77,12 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   （证据：`docs/research/artifacts/ab-fake-persona.md`；调研与验证台账：`docs/research/dsh-findings.md`）
 - ✅ **部署待办五件套**（草案 v0.1，见下方勾选）
 - ✅ 插件依赖已可移植化：仓库相对 `link:` + `make dev` 自动物化（`dsh plugin --profile lepimemory install`）；`make dev` 全流程已实测通过
-- ⏭️ **下一步**：① 真实行动工具 + 审批（含 experience 档 + 失败影响状态）；② 规则集与量级标定；③ 状态面板（client 插件）
+- ✅ **Phase 3 收尾（2026-10-03，分支 `develop`；从 `main` 分并并入 `exp/state-persistence`）**：
+  - **① 行动工具 `write_note`**（`lib/action.js`）：真实落盘 `<DSH_HOME>/lepimemory/notes/`，经 `ctx.approval` 确认；成功进 experience 写路径（`origin:character-action`）与状态机，失败（抛错→`isError`）进状态。证据 `docs/research/artifacts/action-tool.md`。
+  - **② 规则集定稿三条 + 量级标定**（`lib/machine.js`）：`familiarity +0.03`、`action.success.brighten`（valence +0.12）、`tool.failure.dampen`（valence −0.12）——单次行动成功/失败**跨渲染阈值（一轮可见）**，熟悉度 3–4 轮累积可见。证据 `state-machine.md`。
+  - **③ 遗忘子集选择**：`forget` 两段式（缺省 `ids` → 只返回候选计划；带 `ids` → 审批后**只抑制选中项**）。证据 `memory-forget.md`。
+  - **④ 状态面板**（`lib/panel.js` + `client.js` + `package.json`）：`conversation.input.dock` 上实时显示状态（自定义路由 `/lepimemory/state` + 本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）。证据 `state-panel.md`。
+  - 另：模型端点默认切到 **geek-tech-club**（`dsh/profiles/lepimemory/cordis.patch.yml` 的 `agent-default-model`，不再走官方账号）。
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。

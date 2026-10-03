@@ -21,9 +21,9 @@
 架构决策（三项核心：dsh 当骨架 / Hindsight 当记忆微服务 / 状态机自研）、Hindsight 接入与中文修复（换多语言模型）、dsh 侧「状态注入→语气变化」可行性验证。
 详见 `CONCEPTS.md`、`docs/research/*-findings.md`。
 
-### Phase 3（本阶段详录；分支 `exp/state-persistence`）
+### Phase 3（本阶段详录；`exp/state-persistence` → `develop`）
 
-> 全程用 `exp/` 分支；提交带 gitmoji 的 conventional commit；每条改动都留 `docs/research/artifacts/` 证据。
+> 全程用 `exp/` 分支起步；2026-10-03 起收尾改在 **`develop`**（从 `main` 分出并并入 `exp/state-persistence`）。提交带 gitmoji 的 conventional commit；每条改动都留 `docs/research/artifacts/` 证据。
 
 | # | 提交 | 事项 |
 | --- | --- | --- |
@@ -43,6 +43,11 @@
 | 14 | `ece201d` | **遗忘 v1**：计划预览 → 确认 → `invalidate`（可撤销，只切相关）。证据 `memory-forget.md` |
 | 15 | `7952eb5` | `DEMO.md` 步骤 E 改口「遗忘可演示」 |
 | 16 | （本会话） | **遗忘工具化**：正则 → **`forget` + `restore_memory` 工具 + `ctx.approval`**（含 schema 两坑、工具可见性实测）；证据 `memory-forget.md` |
+| 17 | （本会话，`develop`） | **行动工具 `write_note`**：真实落盘 + 审批 + experience 写路径 + 失败进状态；证据 `action-tool.md` |
+| 18 | （本会话，`develop`） | **规则定稿三条 + 量级标定**：单次行动成功/失败跨渲染阈值（一轮可见）；证据 `state-machine.md` |
+| 19 | （本会话，`develop`） | **遗忘子集**：`forget` 两段式（缺省只返回候选计划 → 带 `ids` 才审批执行）；证据 `memory-forget.md` |
+| 20 | （本会话，`develop`） | **状态面板**：`lib/panel.js` 路由 + `client.js` 面板 + `package.json` `dsh.client`；证据 `state-panel.md` |
+| 21 | （本会话，`develop`） | **模型端点切 geek-tech-club**（默认不再走官方账号）；`develop` 分支建立（`main` 并入 `exp/state-persistence`） |
 
 ---
 
@@ -79,6 +84,18 @@
    曾误判：以为 bundle（host 面）注册的工具进不了 preset 会话。
    **实测推翻**：工具注册表是「全局层 + per-scope 层」**合并**，runtime 在根上下文 `ctx.tools.register` 的工具**会到达每个 agent**（本轮 `forget` 出现在会话 `request/header.tools` 即证）；之前会话没有 `tool-bash/fs`，是 web bundle 把那些**行 `disabled`** 了，不是 preset 挡的。
    ⚠️ 教训：`--dump-config` 里「有某行」≠「会话能用它」——dump 只是「已注册」，会话能力面由 preset + disabled 共同决定。
+16. **`tool/result` 的 `isError`/`toolCallId` 在 message 顶层（会话格式 V4）** `[已核对]`
+    现象：想按 `isError`/`toolCallId` 关联 call/result，先从磁盘 `session.jsonl.zstd` 读到 `message.content[].{type:'tool-result',…}` 的**嵌套**形状，差点照此实现。
+    根因：磁盘文件**有版本**——`session.jsonl.zstd` 可能是旧 **V2** 遗留（tool 结果 wrap 成 user 消息）；当前格式是 **V4**（first-class tool-role 消息，`toolCallId`/`isError` 在 **message 顶层**），另有 v2→v3→v4 迁移包（`@deepseek-ai/dsh-session-format-*`）。安装版 `@deepseek-ai/dsh-llm` 的 `ToolResultMessage` d.ts 亦证。
+    处置：`toolResultInfo(message)` 读**顶层**；核对一律用 `session.v4.jsonl.zstd` 或源码类型。
+17. **工具结果只有 `output.render` 是模型可见的** `[已修]`
+    现象：`forget` 两段式第一段要把候选 `ids` 交给模型回传，但初版 `render` 只渲染文本 → 模型**拿不到 id**，第二段无法发起（文案还写「ids 见结果」，实则没给）。
+    根因：`output.render(args,value)` 产出**模型可见 content**；工具返回的 `value`（含 ids）默认不给模型（`value` 只过 schema 校验）。
+    处置：**模型要用的字段必须写进 `render`**（plan 分支逐条渲染 `[id] 文本`）。
+18. **`webServer` 在插件 `apply` 时通常未就绪** `[已修]`
+    现象：插件里 `ctx.get('webServer')` 为 `undefined` → 面板路由静默不注册（`GET /lepimemory/state` → 404）。
+    根因：cordis 服务由别的插件提供；本插件 `apply` 时 web 栈可能还没挂上，`ctx.get` 是**即时**读取（不是响应式等待）。
+    处置：用 **`ctx.inject(['webServer'], scope => …)`** 延迟到服务可用再 `scope.effect(() => server.register(…))`。
 
 ### 2.3 记忆服务（Hindsight）类
 8. **retain 的 3s 预算 → 假报 degraded** `[已修]`
@@ -119,12 +136,12 @@
 | --- | --- | --- | --- |
 | A | ~~遗忘确认匹配过宽~~ | ✅ **已解决**（正则 → `forget` 工具 + `ctx.approval`） | 本文 §2.4 #11 |
 | B | ~~`FORGET_RE` 任意位置匹配~~ | ✅ **已解决**（意图判定交给模型，无消息级正则） | 本文 §2.4 #11 |
-| C | 遗忘**子集不可选**：工具一次抑制「与目标相关」的全部候选 | 仍开；「只清这条」需工具带 `ids` 参数 | `memory-forget.md` |
+| C | ~~遗忘**子集不可选**：工具一次抑制「与目标相关」的全部候选~~ | ✅ **已解决**：`forget` 两段式（缺省只返回候选计划 → 带 `ids` 只抑制选中项） | 本文 §2.2 #17；`memory-forget.md` |
 | D | ~~工具可见性未验~~ | ✅ **已证**：runtime 根上下文注册的工具会到每个 agent（`forget` 实测在 `request/header.tools`） | 本文 §2.2 #7 |
 | E | 意图/确认仍是**正则** | ✅ 遗忘已工具化；写路径的「是否值得写」仍是启发式（可接受，见 §2.4 #10） | — |
 | F | 「关于 A」vs「A 参与」切分 | 仍是**回避**（候选+确认） | `DESIGN_NOTES §2.5` |
 
-> ✅ A/B/D 已解决（遗忘改为工具 + 审批）；仅 **C（子集选择）** 仍开。
+> ✅ A/B/C/D 均已解决（遗忘改为工具 + 审批；子集选择已落地）。
 
 ---
 
