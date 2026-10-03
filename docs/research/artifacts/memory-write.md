@@ -11,7 +11,7 @@
 | 层 | 判定 | 落点 |
 | --- | --- | --- |
 | ① 不写 | 过短 / **疑问句**（含 `？`）/ **请求句**（`提醒我…`）/ 寒暄 | 审计记 `skipped` + `reason` |
-| ② experience | **待接**（本步未做；角色暂无「行动/工具结果」类经历） | — |
+| ② experience | ✅ **已接（2026-10-03）**：角色**行动成功**（`write_note`）→ `retain` `content:"我写了张便条：…"`、`tags:["origin:character-action","trust:experience"]` | `retain.jsonl`（`origin:character-action`） |
 | ③ fact / preference | 其余**用户陈述** → `retain`（Hindsight `concise` 负责过滤填充语、抽成事实） | `trust:fact` 标签 |
 
 - `tags: ["origin:user-turn", "trust:fact"]` 标来源与信任等级（CONCEPTS §4.2 的「事实/推断/经历」先落 fact 档）。
@@ -48,7 +48,7 @@
 
 1. **headless 一次性进程抓不到 fire-and-forget**：进程在 retain 完成前就退出 → 写路径测试须用**常驻服务（web / resident）**。
 2. 写入判断仍是**朴素版**：靠长度门槛 + 交 Hindsight `concise` 抽取；**未**做「模型级推断/经历」判断，也没有「用户确认后写入」的协商。
-3. experience（角色行动/工具结果）与 inference 档**未接**——待「行动工具」落地后再补（CONCEPTS §4.2 / §4.4）。
+3. ✅ experience（角色行动/工具结果）**已接**（2026-10-03，见 `action-tool.md`）；**inference 档未接**——待后续（CONCEPTS §4.2 / §4.4）。
 4. 端到端「埋信息 → 换会话 → 被问起」的完整演示，留给 `DEMO.md` 剧本阶段。
 
 ## 结论
