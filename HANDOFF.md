@@ -82,7 +82,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   - **② 规则集定稿三条 + 量级标定**（`lib/machine.js`）：`familiarity +0.03`、`action.success.brighten`（valence +0.12）、`tool.failure.dampen`（valence −0.12）——单次行动成功/失败**跨渲染阈值（一轮可见）**，熟悉度 3–4 轮累积可见。证据 `state-machine.md`。
   - **③ 遗忘子集选择**：`forget` 两段式（缺省 `ids` → 只返回候选计划；带 `ids` → 审批后**只抑制选中项**）。证据 `memory-forget.md`。
   - **④ 状态面板**（`lib/panel.js` + `client.js` + `package.json`）：`conversation.input.dock` 上实时显示状态（自定义路由 `/lepimemory/state` + 本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）。证据 `state-panel.md`。
-  - 另：模型端点默认切到 **geek-tech-club**（`dsh/profiles/lepimemory/cordis.patch.yml` 的 `agent-default-model`，不再走官方账号）。
+  - 另：模型端点已切到 **geek-tech-club**（仅**本机常驻 profile**；仓库草稿保持「不默认启用」——避免个人端点入库，也避免全新 clone 未设 `LEPI_LLM_BASE_URL` 时把 GEEK key 发到官方端点）。
 - ✅ **Phase 3 第一步（状态持久化，路 B）已完成**（2026-09-29）：
   插件改读 `<DSH_HOME>/lepimemory/state.json`（补丁层 `dshHomePath` + 插件兜底），每轮组装重读渲染（`section.text` 函数形式）。
   四项验收全过：① 首次启动自动写入 ② 状态→语气（A/B + 同会话无需重启）③ 重启仍在 ④ 坏 JSON 报错（含字段路径/位置）。

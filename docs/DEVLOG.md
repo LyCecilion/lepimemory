@@ -47,7 +47,7 @@
 | 18 | （本会话，`develop`） | **规则定稿三条 + 量级标定**：单次行动成功/失败跨渲染阈值（一轮可见）；证据 `state-machine.md` |
 | 19 | （本会话，`develop`） | **遗忘子集**：`forget` 两段式（缺省只返回候选计划 → 带 `ids` 才审批执行）；证据 `memory-forget.md` |
 | 20 | （本会话，`develop`） | **状态面板**：`lib/panel.js` 路由 + `client.js` 面板 + `package.json` `dsh.client`；证据 `state-panel.md` |
-| 21 | （本会话，`develop`） | **模型端点切 geek-tech-club**（默认不再走官方账号）；`develop` 分支建立（`main` 并入 `exp/state-persistence`） |
+| 21 | （本会话，`develop`） | **模型端点切 geek-tech-club**（本机常驻 profile；仓库草稿保持 opt-in，见 §2.2 #19）；`develop` 分支建立（`main` 并入 `exp/state-persistence`） |
 
 ---
 
@@ -96,6 +96,10 @@
     现象：插件里 `ctx.get('webServer')` 为 `undefined` → 面板路由静默不注册（`GET /lepimemory/state` → 404）。
     根因：cordis 服务由别的插件提供；本插件 `apply` 时 web 栈可能还没挂上，`ctx.get` 是**即时**读取（不是响应式等待）。
     处置：用 **`ctx.inject(['webServer'], scope => …)`** 延迟到服务可用再 `scope.effect(() => server.register(…))`。
+19. **把个人端点默认写进仓库草稿** `[已修]`
+    现象：仓库 profile 草稿把默认模型**默认启用**到 `geek-tech-club`，但该 provider 的 `baseURL` 回落官方端点 → 全新 clone 只填 `GEEK_TECH_CLUB_API_KEY`、没填 `LEPI_LLM_BASE_URL` 时，**GEEK 的 key 被发到官方端点**，默认模型直接坏。
+    根因：端点地址属个人资产（`.sanitize-patterns` **禁入库**），仓库里给不出正确默认；`PatchOptions.disabled` 是 `boolean|null`，**不支持 `!!js` 条件**，做不成「有 env 才启用」。
+    处置：**仓库草稿保持 opt-in（默认注释、不启用）**；个人端点只落在**本机常驻 profile**。已核对 `.env.example`「留空→回落官方端点」的既有语义不变。
 
 ### 2.3 记忆服务（Hindsight）类
 8. **retain 的 3s 预算 → 假报 degraded** `[已修]`
