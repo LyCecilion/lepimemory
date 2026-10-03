@@ -22,8 +22,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { ACTION_TOOLS, installAction, toolResultInfo } from "./action.js";
 import { advance } from "./machine.js";
 import { installMemory } from "./memory.js";
+import { installPanel } from "./panel.js";
 import {
     defaultStateFile,
     expandHome,
@@ -97,7 +99,7 @@ export function apply(ctx, config) {
     );
 
     // ── 状态机：吃结构事件，在轮次收尾时推进状态 + 落审计 ──────────────────
-    const turns = new Map(); // sessionId -> { turn, userMessages, toolFailures }
+    const turns = new Map(); // sessionId -> { turn, userMessages, toolFailures, actionSuccesses, __pendingActionCalls? }
 
     function settle(facts) {
         const read = readStateFile(file);
@@ -132,16 +134,29 @@ export function apply(ctx, config) {
             const id = String(session.id);
             switch (event.type) {
                 case "turn/start":
-                    turns.set(id, { turn: event.data.turn, userMessages: 0, toolFailures: 0 });
+                    turns.set(id, { turn: event.data.turn, userMessages: 0, toolFailures: 0, actionSuccesses: 0 });
                     break;
                 case "user/message": {
                     const facts = turns.get(id);
                     if (facts && event.data?.source?.kind === "user") facts.userMessages += 1;
                     break;
                 }
+                case "tool/call": {
+                    const facts = turns.get(id);
+                    if (facts && ACTION_TOOLS.has(event.data?.name)) {
+                        facts.__pendingActionCalls ??= new Map();
+                        facts.__pendingActionCalls.set(event.data.callId, true);
+                    }
+                    break;
+                }
                 case "tool/result": {
                     const facts = turns.get(id);
-                    if (facts && event.data?.message?.isError === true) facts.toolFailures += 1;
+                    if (!facts) break;
+                    const info = toolResultInfo(event.data?.message);
+                    if (info.isError === true) facts.toolFailures += 1;
+                    if (info.toolCallId && facts.__pendingActionCalls?.get(info.toolCallId) && info.isError !== true) {
+                        facts.actionSuccesses += 1;
+                    }
                     break;
                 }
                 case "turn/end": {
@@ -160,4 +175,10 @@ export function apply(ctx, config) {
 
     // ── 记忆桥：每轮按用户输入召回长期记忆、归因后注入（失败则降级无记忆）──────
     installMemory(ctx, config, { logger, stateFile: file });
+
+    // ── 行动工具：能产生真实副作用的工具（经 ctx.approval 确认后执行）──────────
+    installAction(ctx, config, { logger, stateFile: file });
+
+    // ── 状态面板：Host 侧 HTTP 路由，供浏览器半面板读状态 ──────────────────
+    installPanel(ctx, config, { logger, stateFile: file });
 }

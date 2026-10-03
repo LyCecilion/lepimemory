@@ -23,21 +23,28 @@ function round4(value) {
 }
 
 /**
- * 规则集（机制验证版：只放方向明确、必然成立的最小规则；量级待实测，DESIGN_NOTES §1.7）。
+ * 规则集（定稿三条；量级经标定：单次行动成功/失败即跨渲染阈值 |Δ|≥0.10 → 一轮可见）。
  * 每条都写清「为什么存在」；新增规则请同样注释。
  */
 export const RULES = [
     {
         id: "interaction.familiarity",
-        why: "本轮用户说过话 → 熟悉度小幅累积（关系不衰减，只随相处增加）。",
+        why: "本轮用户说过话 → 熟悉度累积（关系不衰减）。",
         when: (facts) => facts.userMessages > 0,
-        deltas: { "relation.familiarity": 0.02 },
+        deltas: { "relation.familiarity": 0.03 },
+    },
+    {
+        id: "action.success.brighten",
+        why: "本轮角色成功办成一件事 → 心境上扬、更亲近（行动结果作为经历）。",
+        when: (facts) => facts.actionSuccesses > 0,
+        deltas: { "mood.valence": 0.12, "relation.closeness": 0.03 },
+        reason: "刚刚帮你把事办成了。",
     },
     {
         id: "tool.failure.dampen",
-        why: "本轮有工具失败 → 心境略降、信任略降（失败作为「经历」进入状态机，CONCEPTS §4.4）。",
+        why: "本轮有工具失败 → 心境下降、信任略降（失败作为「经历」进入状态机，CONCEPTS §4.4）。",
         when: (facts) => facts.toolFailures > 0,
-        deltas: { "mood.valence": -0.08, "relation.trust": -0.02 },
+        deltas: { "mood.valence": -0.12, "relation.trust": -0.04 },
         reason: "刚才有个操作没成。",
     },
 ];

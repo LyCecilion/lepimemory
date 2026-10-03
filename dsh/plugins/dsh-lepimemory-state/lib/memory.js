@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ACTION_TOOLS, toolResultInfo } from "./action.js";
 import { HindsightClient, attribute, renderRecall } from "./hindsight.js";
 
 /** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；参考仓内 session-reference 的自定义 kind）。 */
@@ -40,6 +41,15 @@ function injectMessage(text, { kind, form, summary }) {
     const source = { kind, form };
     if (form === "notice") source.summary = String(summary ?? text).slice(0, 120);
     return { id: randomUUID(), role: "user", content: [{ type: "text", text }], source };
+}
+
+/** 从 `tool/call` 的 arguments（JSON 串）里取标题；解析失败返回空串。 */
+function parseTitle(argumentsJson) {
+    try {
+        return String(JSON.parse(argumentsJson)?.title ?? "");
+    } catch {
+        return "";
+    }
 }
 
 /**
@@ -71,6 +81,14 @@ function renderForget(value) {
     switch (value.outcome) {
         case "no-match":
             return `没有找到与「${value.target}」相关的长期记忆，无需遗忘。`;
+        case "plan": {
+            const ids = value.ids ?? [];
+            const lines = (value.memories ?? [])
+                .slice(0, 20)
+                .map((t, i) => `· [${ids[i] ?? "?"}] ${t}`)
+                .join("\n");
+            return `关于「${value.target}」有 ${value.planned} 条候选。请把清单给用户看、让 ta 选择要抑制哪些，再用 ids 调用本工具执行：\n${lines}`;
+        }
         case "unavailable":
             return `找到了 ${value.planned} 条关于「${value.target}」的记忆，但**没有可用的确认通道**，未执行（可稍后再试）。`;
         case "rejected":
@@ -132,6 +150,8 @@ export function installMemory(ctx, config, { logger, stateFile }) {
     const injectedTurns = new Map(); // sessionId -> 已注入的 turn（每轮至多注入一次）
     const turnUserText = new Map(); // sessionId -> 本轮用户说过的话（写路径缓冲）
     const recentRetained = new Set(); // 去重
+    const pendingAction = new Map(); // callId -> { name, title }（待配对的行动工具调用）
+    const turnActions = new Map(); // sessionId -> 本轮成功动作 [{ name, title }]
 
     // ── 读路径：pre-step 召回 → 归因 → 注入 ─────────────────────────────
     ctx.on(
@@ -183,12 +203,17 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                 ctx.tools.register({
                     name: FORGET_TOOL,
                     description:
-                        "把某个对象从长期记忆里“忘掉”（检索抑制，可恢复）。会先列出将受影响的记忆并请用户确认，只有用户同意后才执行。当用户明确要求忘记某人/某事时调用。",
+                        "把某个对象从长期记忆里“忘掉”（检索抑制，可恢复）。**两段式**：先不带 ids 调一次 → 返回候选清单（计划），把它给用户看、让 ta 选择；再把选中的 ids 带上调一次 → 经用户确认后执行抑制。当用户明确要求忘记某人/某事时调用。",
                     parameters: {
                         type: "object",
                         additionalProperties: false,
                         properties: {
                             target: { type: "string", description: "要忘掉的对象（人名 / 事物 / 说法）" },
+                            ids: {
+                                type: "array",
+                                items: { type: "string" },
+                                description: "只抑制这些记忆 id（来自上一次调用的候选 ids）；省略则仅返回候选计划",
+                            },
                         },
                         required: ["target"],
                     },
@@ -201,9 +226,10 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                                 planned: { type: "number" },
                                 executed: { type: "number" },
                                 outcome: { type: "string" },
+                                ids: { type: "array", items: { type: "string" } },
                                 memories: { type: "array", items: { type: "string" } },
                             },
-                            required: ["target", "planned", "executed", "outcome", "memories"],
+                            required: ["target", "planned", "executed", "outcome", "ids", "memories"],
                         },
                         render: (_args, value) => [{ type: "text", text: renderForget(value) }],
                     },
@@ -219,15 +245,34 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                         }
                         const { picked } = attribute(response?.results, { minSemantic: 0.3, maxItems: 20 });
                         // 朴素 S1 切分：只取**文本确实提到目标**的候选（避免误伤无关片段）。
-                        const selected = picked.filter((m) => String(m.text ?? "").includes(target));
-                        const memories = selected.map((m) => String(m.text ?? ""));
-                        if (selected.length === 0) {
-                            return { target, planned: 0, executed: 0, outcome: "no-match", memories: [] };
+                        const related = picked.filter((m) => String(m.text ?? "").includes(target));
+                        if (related.length === 0) {
+                            return { target, planned: 0, executed: 0, outcome: "no-match", ids: [], memories: [] };
                         }
+
+                        // 第一段（缺省 ids）：只返回候选计划——不请求审批、不执行。
+                        if (!Array.isArray(args?.ids) || args.ids.length === 0) {
+                            return {
+                                target,
+                                planned: related.length,
+                                executed: 0,
+                                outcome: "plan",
+                                ids: related.map((m) => m.id),
+                                memories: related.map((m) => String(m.text ?? "")),
+                            };
+                        }
+
+                        // 第二段：只抑制用户选中的 id（避免「全量抑制」与模型陈述不符）。
+                        const wanted = new Set(args.ids.map((s) => String(s)));
+                        const selected = related.filter((m) => wanted.has(String(m.id)));
+                        if (selected.length === 0) {
+                            return { target, planned: 0, executed: 0, outcome: "no-match", ids: [], memories: [] };
+                        }
+                        const memories = selected.map((m) => String(m.text ?? ""));
 
                         const approver = ctx.get ? ctx.get("approval") : undefined;
                         if (!approver) {
-                            return { target, planned: selected.length, executed: 0, outcome: "unavailable", memories };
+                            return { target, planned: selected.length, executed: 0, outcome: "unavailable", ids: selected.map((m) => m.id), memories };
                         }
                         const outcome = await approver.request({
                             agent: exec.agent,
@@ -241,7 +286,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                             ...(exec.signal ? { signal: exec.signal } : {}),
                         });
                         if (outcome !== "allowed-once") {
-                            return { target, planned: selected.length, executed: 0, outcome, memories };
+                            return { target, planned: selected.length, executed: 0, outcome, ids: selected.map((m) => m.id), memories };
                         }
 
                         let done = 0;
@@ -257,7 +302,7 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                             type: "forget", at: new Date().toISOString(), tool: FORGET_TOOL, target,
                             planned: selected.length, executed: done, outcome, ids: selected.map((m) => m.id),
                         }, logger);
-                        return { target, planned: selected.length, executed: done, outcome, memories };
+                        return { target, planned: selected.length, executed: done, outcome, ids: selected.map((m) => m.id), memories };
                     },
                 }),
             "lepimemory.forget()",
@@ -351,6 +396,27 @@ export function installMemory(ctx, config, { logger, stateFile }) {
     if (retainEnabled) {
         ctx.on("session/event", (session, event) => {
             const id = String(session.id);
+
+            // 行动工具调用：记下待配对的 callId（含标题）。
+            if (event.type === "tool/call") {
+                if (ACTION_TOOLS.has(event.data?.name)) {
+                    pendingAction.set(event.data.callId, { name: event.data.name, title: parseTitle(event.data.arguments) });
+                }
+                return;
+            }
+            // 行动工具结果：成功则记入本轮的「角色动作」。
+            if (event.type === "tool/result") {
+                const info = toolResultInfo(event.data?.message);
+                const pending = info.toolCallId ? pendingAction.get(info.toolCallId) : undefined;
+                if (pending) {
+                    pendingAction.delete(info.toolCallId);
+                    if (info.isError !== true) {
+                        turnActions.set(id, [...(turnActions.get(id) ?? []), pending]);
+                    }
+                }
+                return;
+            }
+
             if (event.type === "user/message") {
                 if (event.data?.source?.kind !== "user") return;
                 const text = (event.data.content ?? [])
@@ -362,40 +428,59 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                 return;
             }
             if (event.type !== "turn/end") return;
+
+            // (a) 用户陈述 → retain（沿用既有的写入判断 / 去重）。
             const texts = turnUserText.get(id);
             turnUserText.delete(id);
-            if (!texts || texts.length === 0) return;
+            if (texts && texts.length > 0) {
+                const content = texts.join("\n").trim();
+                const skipReason = writeSkipReason(content, retainMinChars);
+                if (skipReason) {
+                    appendAudit(retainAudit, {
+                        type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                        skipped: true, reason: skipReason, chars: content.length, content,
+                    }, logger);
+                } else {
+                    const key = content.replace(/\s+/g, "");
+                    if (recentRetained.has(key)) {
+                        appendAudit(retainAudit, {
+                            type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                            skipped: true, reason: "重复内容（去重）", content,
+                        }, logger);
+                    } else {
+                        recentRetained.add(key);
+                        if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
+                        const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
+                        client
+                            .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
+                            .then((res) => appendAudit(retainAudit, {
+                                type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                                ok: true, chars: content.length, items: res?.items_count, content,
+                            }, logger))
+                            .catch((err) => appendAudit(retainAudit, {
+                                type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                                degraded: true, error: String(err?.message ?? err), content,
+                            }, logger));
+                    }
+                }
+            }
 
-            const content = texts.join("\n").trim();
-            const skipReason = writeSkipReason(content, retainMinChars);
-            if (skipReason) {
-                appendAudit(retainAudit, {
-                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                    skipped: true, reason: skipReason, chars: content.length, content,
-                }, logger);
-                return;
+            // (b) 角色行动成功 → retain 成「经历」（fire-and-forget；与用户陈述互不干扰）。
+            const actions = turnActions.get(id);
+            turnActions.delete(id);
+            for (const action of actions ?? []) {
+                const content = `我写了张便条：${action.title}`;
+                client
+                    .retain([{ content, context: "角色做过的事", tags: ["origin:character-action", "trust:experience"] }], { deadlineMs: 30000, maxRetries: 0 })
+                    .then((res) => appendAudit(retainAudit, {
+                        type: "retain", origin: "character-action", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                        ok: true, items: res?.items_count, content,
+                    }, logger))
+                    .catch((err) => appendAudit(retainAudit, {
+                        type: "retain", origin: "character-action", at: new Date().toISOString(), session: id, turn: event.data?.turn,
+                        degraded: true, error: String(err?.message ?? err), content,
+                    }, logger));
             }
-            const key = content.replace(/\s+/g, "");
-            if (recentRetained.has(key)) {
-                appendAudit(retainAudit, {
-                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                    skipped: true, reason: "重复内容（去重）", content,
-                }, logger);
-                return;
-            }
-            recentRetained.add(key);
-            if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
-            const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
-            client
-                .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
-                .then((res) => appendAudit(retainAudit, {
-                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                    ok: true, chars: content.length, items: res?.items_count, content,
-                }, logger))
-                .catch((err) => appendAudit(retainAudit, {
-                    type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                    degraded: true, error: String(err?.message ?? err), content,
-                }, logger));
         });
     }
 
