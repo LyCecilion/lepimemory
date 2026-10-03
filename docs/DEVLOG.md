@@ -53,7 +53,7 @@
 
 | # | 提交 | 事项 |
 | --- | --- | --- |
-| 22 | （本会话） | **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（preset 的 `isolate` realm）。推翻旧稿「compaction 暂禁」的顾虑。证据 `context-management.md` |
+| 22 | （本会话） | **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（preset 的 `isolate` realm）。推翻旧稿「compaction 暂禁」的顾虑。证据 `context-management.md`（含**自动**与**手动 `/compact`** 两条路径实测） |
 | 23 | （本会话） | **记忆更新/冲突（Lv2）**：recall 带 `prefer_observations`（冲突**取最新**＝Hindsight observation supersede）；`recall.jsonl` 记 `type`/`trust`/`superseded`。证据 `memory-update-trust.md` |
 | 24 | （本会话） | **三档信任 + 差异化衰减（Lv2）**：`lib/trust.js`（fact/experience/**inference 半衰期 14 天**）+ `metadata.trust` + **`remember` 工具**（角色主动记推断）。证据 `memory-update-trust.md` |
 

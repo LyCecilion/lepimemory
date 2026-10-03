@@ -69,6 +69,10 @@ bench：`DSH_HOME=/tmp/lep-web` + 仓库 profile（绝对 link）+ `--patch <mac
   `compaction/start` → `compaction/summary`（含 `shadowedSeqs`）→ `compaction/end`，
   并落一条 **`source.kind: 'compact-checkpoint'`** 的替换 `user/message`（内含 `<compacted-summary>…`）；此后 `contextPressure.pressureTokens` **平台化**（不再随轮次增长）。
 - **收缩校验确实生效**：激进配置下多次出现 `summary is not smaller than the shadowed content` / `summarization truncated at the token cap` ——被正确拒绝、不写脏数据（生产保留尾部大，不会遇到）。
+- **手动 `/compact`（DEMO 步骤 G 的唯一现实路径）已端到端验证**：`commands/execute` 发 `/compact` → 会话日志出现
+  `command/run(compact)` → `compaction/start` → `compaction/summary`（`shadowedSeqs` 23 条）→ `compaction/end` → `command/done`，
+  并落一条 3320 字的 `compact-checkpoint`；返回 `{kind:"success", text:"Compacted 23 history items (~1706 tokens)."}`。
+  命令**确实注册、可执行、走同一压缩引擎**（隔离验证时把 `auto` 关掉、只走 `/compact`，排除自动路径干扰）。
 - **状态段未被压**：压缩后 `system/message` 仍在、后续轮次照常注入状态。
 
 ## 6. 诚实边界
