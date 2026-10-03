@@ -7,9 +7,9 @@
 
 ## 为什么走自定义路由
 
-浏览器**读不到** `DSH_HOME` 文件；本项目状态是 **host 文件派生**（读 `state.json`），不是日志派生 → dsh 的 projection 机制不适用。故注册一条本机 HTTP 路由把状态投影成 JSON：
+浏览器**读不到** `DSH_HOME` 文件；本项目状态是 **host 文件派生**（读 `state.json` / `*.jsonl`），不是日志派生 → dsh 的 projection 机制不适用。故注册本机 HTTP 路由把状态与账本投影成 JSON（两条）：
 
-- `webServer.register({ kind:'exact', path:'/lepimemory/state', handler:(req,res)=>… })`，返回 disposer（`ctx.effect` 包裹）。
+- `/lepimemory/state`：当前状态；`/lepimemory/history?kind=&limit=&offset=`：历史账本分页。均 `webServer.register({ kind:'exact', path, handler:(req,res)=>… })`，返回 disposer（`ctx.effect` 包裹）。
 - **信任栅栏**：自定义路由在 dsh 的 `/api/*` 栅栏之外，故**自行校验** Host/Origin 是本机 loopback（否则 `403`）。
 - 响应：`{ ok:true, rendered: renderState(state), mood, relation, updatedAt }`；读失败 → `{ ok:false, error }`（200）。
 
@@ -45,8 +45,22 @@ window.__ModuleLoader__.load({
 4. **信任栅栏**：`GET /lepimemory/state`（`Host: evil.example.com`）→ **403**。
 5. **降级**：补丁层 `config.panel.enabled=false` → 重启后 `GET /lepimemory/state` → **404**（无路由），面板显示 **「State unavailable」**，无报错。
 
+## 历史分页（`/lepimemory/history`，2026-10-03）
+
+- **白名单**：`kind ∈ {audit, recall, retain, forget, action}` → 固定文件名（白名单即防路径穿越；未知 kind → **400**）。
+- **参数**：`limit`（默认 10，钳 1..100）、`offset`（默认 0）；**最新在前**（读文件后反转）；坏行跳过（一行脏数据不毁整页）。
+- **服务端出摘要**：每条返回 `{ at, summary, raw }`——摘要按 kind 生成（audit：`命中 <规则> · <维度 前→后>`；recall：`「<query>」候选 N · 入选 M`；retain：`写入「…」`/`跳过（原因）`；forget：`遗忘/恢复「…」 executed/planned`；action：`写便条《…》→ path`），前端只排版。
+- **信任栅栏**：同 `/lepimemory/state`（本机 loopback，否则 403）。
+- **前端**：面板「▸ History」可折叠；kind 标签页（审计/召回/写入/遗忘/行动）；列表 + `上一页/下一页` + `第 p/q 页 · 共 n 条`（10/页）；随 5s 轮询刷新；locale 有 zh/en。
+
+实测：
+
+- `GET /lepimemory/history?kind=audit&limit=3` → `{ok:true,total:8,entries:[…最新在前…]}`；`kind=../../etc/passwd` → **400**；伪造 Host → **403**。
+- 浏览器：展开 History → 审计 8 条（时间 + 摘要）；切「召回」→ 列表变为召回条目；补足到 20 条后 `Page 1/2 → Next → Page 2/2`（Next 置灰）。
+
 ## 结论
 
-- ✅ Host 路由 + 浏览器半面板打通：**状态实时可见**，随状态机变化刷新。
+- ✅ Host 路由 + 浏览器半面板打通：**状态实时可见**，且**审计/召回/写入/遗忘/行动五类账本可翻页回看**。
 - ✅ 降级路径干净：无 `webServer` / 显式关闭 → 面板显示不可用、不影响其余功能。
-- 未做（有意）：`audit.jsonl`/`recall.jsonl` 分页展示（需 Remote 或带 query 的路由）；面板只显示**当前值**。
+- ✅ 历史分页（`/lepimemory/history`）：白名单 + 分页 + 信任栅栏 + 服务端出摘要；前端折叠面板 + 标签页 + 翻页。
+- 未做（有意）：真实 Remote（走服务端事件）；面板**只读**——改状态仍走编辑 `state.json` 或 `write_note`，不从面板写。

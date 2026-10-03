@@ -46,7 +46,7 @@
 | 17 | （本会话，`develop`） | **行动工具 `write_note`**：真实落盘 + 审批 + experience 写路径 + 失败进状态；证据 `action-tool.md` |
 | 18 | （本会话，`develop`） | **规则定稿三条 + 量级标定**：单次行动成功/失败跨渲染阈值（一轮可见）；证据 `state-machine.md` |
 | 19 | （本会话，`develop`） | **遗忘子集**：`forget` 两段式（缺省只返回候选计划 → 带 `ids` 才审批执行）；证据 `memory-forget.md` |
-| 20 | （本会话，`develop`） | **状态面板**：`lib/panel.js` 路由 + `client.js` 面板 + `package.json` `dsh.client`；证据 `state-panel.md` |
+| 20 | （本会话，`develop`） | **状态面板**：`lib/panel.js` 路由 + `client.js` 面板 + `package.json` `dsh.client`；**+ `/lepimemory/history` 历史分页（审计/召回/写入/遗忘/行动，可翻页）**；证据 `state-panel.md` |
 | 21 | （本会话，`develop`） | **模型端点切 geek-tech-club**（本机常驻 profile；仓库草稿保持 opt-in，见 §2.2 #19）；`develop` 分支建立（`main` 并入 `exp/state-persistence`） |
 
 ---

@@ -49,6 +49,6 @@ systemctl --user restart lepimemory-dsh
 - **记忆写路径（v1.1）**：`turn/end` 收尾时对本轮**用户陈述**做写入判断（过短/**疑问**/**请求**/寒暄跳过 + 内容去重）→ Hindsight `retain`（`concise` 抽取）+ `trust:fact` 标签；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算，retain 非幂等故**不重试**）。**experience 档已接**（角色成功动作 → retain `origin:character-action`）；推断档待接。
 - **遗忘 + 恢复（工具 + 审批）**：注册 **`forget` 工具**（**由模型调用**，不从消息跑正则）→ 先 recall 出受影响记忆 → **`ctx.approval` 结构化确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（S1 检索抑制）；对称的 **`restore_memory` 工具**做撤销（ids 从 `forget.jsonl` 读回，同样经审批）。只切**文本提到目标**的候选；审计 `forget.jsonl`。工具注册在根上下文即可达每个 agent（`request/header.tools` 已实测含二者）。
 - **行动工具 `write_note`**：真实落盘 `<DSH_HOME>/lepimemory/notes/`，经 `ctx.approval` 确认；成功进 experience 写路径（`origin:character-action`）与状态机，失败（抛错→`isError`）进状态（`tool.failure.dampen`）。审计 `action.jsonl`。
-- **状态面板**：`conversation.input.dock` 上的 client 面板（`client.js`，package.json 声明 `dsh.client`）+ 自定义路由 `/lepimemory/state`（本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）。
-- **待办**：面板历史分页（`audit.jsonl` / `recall.jsonl`）；更细的关系/情绪规则；上下文管理策略。
+- **状态面板**：`conversation.input.dock` 上的 client 面板（`client.js`，package.json 声明 `dsh.client`）+ 自定义路由 `/lepimemory/state`（本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）+ **`/lepimemory/history` 历史账本分页**（审计/召回/写入/遗忘/行动五类；白名单 kind + limit/offset + 本机信任栅栏；面板可折叠、切标签、翻页）。
+- **待办**：更细的关系/情绪规则；上下文管理策略；事实/推断/经历信任等级细化。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）
