@@ -3,7 +3,7 @@
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 插件：`@dsh-external/dsh-lepimemory-state`（新模块 `lib/hindsight.js` 客户端 + `lib/memory.js` 记忆桥）
-- 机制：`agent/pre-step` waterfall 里 `await` Hindsight **recall(trace)** → **归因筛选** → 把 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息并入 `enter(messages)` → 随请求落库（可回放/可审计）。
+- 机制：`agent/pre-step` waterfall 里 `await` Hindsight **recall(trace, prefer_observations)** → **归因筛选** → 把 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息并入 `enter(messages)` → 随请求落库（可回放/可审计）。
 - 证据只含合成数据（bank `lepimemory`：两条合成记忆）。
 
 ## 扩展点（2026-09-29 复核）
@@ -17,10 +17,12 @@
 - **自定义 `source.kind` 是官方机制**：`MessageSourceMap` 可合并扩展，仓内 `session-reference` 即自declared `kind:'session-reference', form:'recall'`；读路径只校验**事件类型**（`validateStoredEvents`），`source.kind` 位于 `user/message.data` 内、未知 kind 按**不透明**保留 → **不影响重载**。（注意：`kind:'plugin'` **并非** `MessageSourceMap` 的声明成员——它只出现在测试 fixture 与一条 legacy 重写里，故不采用。）
 - **pre-step 每步都触发**（一次工具调用＝多步）：用「仅当本轮**真·用户输入非空** + 每 turn 至多一次（`injectedTurns`）」去重，等价于只在 `step===1` 注入，不会在工具续步里重复注入、污染上下文。
 
-## 归因筛选（最笨版本，先不调优）
+## 归因筛选
 
-`attribute(results, {minSemantic: 0.35, maxItems: 4})`：按 `scores.semantic` 阈值 + 条数上限；入选/排除**都留理由**。
+`attribute(results, {minSemantic: 0.35, maxItems: 4, nowMs, applyDecay})`：**分数阈值 + 信任档衰减 + 条数上限**；入选/排除**都留理由**。
 纯函数，好测。噪声实例：query「下周三的约定」把「用户讨厌香菜」（graph 共现）带出来 → 被 `低相关` 剔除。
+
+> **2026-10-03 扩展**：读路径改 `recall(trace, prefer_observations)`（冲突**取最新**＝observation 取代原始事实）；归因按 `type`/`trust` 计**有效分**（`semantic × decayFactor`，仅 `inference` 档按半衰期 14 天衰减）后筛选与排序，`recall.jsonl` 记 `type`/`trust`/`superseded`；`forget` 取候选传 `applyDecay:false`。见 `memory-update-trust.md`。
 
 ## 健壮性
 
@@ -66,12 +68,12 @@ user/message seq 10 source.kind=lepimemory-recall  form=recall
    → 测试/演示**只用真正的 `lepimemory` profile（web）**——其 preset 把行裁在 agent 之外（该 profile 实测实收工具仅 `ask_user_question`/`web_fetch`/`web_search`）；且以**结构性判据**为准，「模型提到记忆」在 headless 里不算数。
 2. ⚠️ 由此也暴露一个**演示风险**：lepimemory preset 里 `tool-web` 的 `fetch` 开着，模型理论上也能自己去打 API 读记忆、绕过归因。
    → 若要杜绝，需评估收紧 web fetch；当前记为**已知未决**。
-3. 归因仍是**朴素版**（分数阈值）；「情绪门控召回排序」「候选集/排除理由进审计」已具备，调优留后续。
+3. 归因已是「**分数阈值 + 信任档衰减 + 条数上限**」（2026-10-03）；「情绪门控召回排序」（状态→召回偏置）仍未做。
 4. ✅ 写路径（`retain`：什么时候/写什么）**已接**（2026-10-03，见 `memory-write.md`）；本步只做「读」路径。
 
 ## 结论
 
-- ✅ 「一次交互：用户输入 → recall(trace) → 归因筛选 → 注入 → 回答」闭环跑通；注入**落库可回放**（`user/message` + `form:'recall'`）。
+- ✅ 「一次交互：用户输入 → recall(trace, prefer_observations) → 归因筛选 → 注入 → 回答」闭环跑通；注入**落库可回放**（`user/message` + `form:'recall'`）。
 - ✅ 归因入选/排除有理由；失败可降级、有审计。
 - 待续：`retain` 写路径三层判断；`decision/attribution` 深化；收紧 web fetch 的取舍。
-  **2026-10-03 更新**：`retain` 写路径**已接**（含 experience 档）。
+  **2026-10-03 更新**：`retain` 写路径**已接**，三档（fact/experience/inference）齐；读路径加 `prefer_observations` + 信任档衰减（见 `memory-update-trust.md`）。

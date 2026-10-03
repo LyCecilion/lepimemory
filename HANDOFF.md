@@ -102,7 +102,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
 - ✅ **正式人设注入**（2026-09-29）：preset `persona` 行换正式文本（身份内核 / 说话方式 / 边界），
   经 persona 包注册为 agent 作用域 prefix（suffix 空=遮蔽全局后缀）。实机 A/B：不再自称 AI，也无「工作目录 / 跑命令」泄漏。
   证据 `docs/research/artifacts/persona-injection.md`；文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
-- ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)` → 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
+- ✅ **记忆召回竖切**（2026-09-29）：`agent/pre-step` → Hindsight `recall(trace)`（2026-10-03 起带 `prefer_observations`，冲突取最新）→ 归因筛选 → 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 消息 → 自研审计 `recall.jsonl`；失败降级无记忆。
   实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**✅ `retain` 写路径已接（见下）。**
 - ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `metadata.trust=fact`）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
   实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**✅ 三档（fact / experience / inference）均已接入（见 Phase 4）。**
@@ -358,10 +358,10 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 ### 阶段 3：竖切闭环（3–5 天）⭐ 主线
 
 ```
-用户输入 → agent/pre-step 构造 query → Hindsight recall(trace)
-  → 归因筛选（朴素版：分数阈值 + 状态匹配）
+用户输入 → agent/pre-step 构造 query → Hindsight recall(trace, prefer_observations)
+  → 归因筛选（分数阈值 + 信任档衰减 + 状态匹配）
   → 以 ContextForm='recall' 注入 → 模型回答
-  → 写自定义 durable 事件 memory/recall {候选集, 入选, 排除理由, trace 摘要}
+  → 写自有审计 recall.jsonl {候选集, 入选, 排除理由, type/trust}（自定义 durable 事件不可行，见「审计落点更正」）
 ```
 
 **归因筛选先写最笨的版本，别调优**——这一步的价值是把数据结构定下来。

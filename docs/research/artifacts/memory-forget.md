@@ -66,7 +66,7 @@ forget.jsonl     {"type":"forget","tool":"forget","target":"团子","planned":1,
 
 早先「一次抑制全部相关候选」对用户/模型不友好（「只清这条」做不到）。改为**两段式**：
 
-- **第一段（缺省 `ids`）**：`recall(target)` → `attribute(minSemantic 0.3, maxItems 20)` → `related = 文本含 target 的候选` → **只返回候选计划** `{ target, planned, executed:0, outcome:"plan", ids:[…], memories:[…] }`，**不请求审批、不执行**。
+- **第一段（缺省 `ids`）**：`recall(target)`（`prefer_observations:false`）→ `attribute(minSemantic 0.3, maxItems 20, applyDecay:false)` → `related = 文本含 target 的候选` → **只返回候选计划** `{ target, planned, executed:0, outcome:"plan", ids:[…], memories:[…] }`，**不请求审批、不执行**。
 - **第二段（带 `ids`）**：`selected = related.filter(m => args.ids.includes(m.id))` → 空则 `no-match`；否则 **`ctx.approval` 确认 → 仅对选中 id `invalidate`**。
 - `renderForget` 的 `plan` 分支**把每条候选的 id 一并渲染给模型**（`· [<id>] <文本>`），模型才能把选中的 id 回传。
 
