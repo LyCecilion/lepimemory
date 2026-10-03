@@ -38,6 +38,14 @@
 9. **section `text` 支持函数形式**：每次 prompt 组装都会调用 `section.text(context)`（`packages/core/system-prompt/src/index.ts:606`）——「每轮重读外部状态」的机制依据（2026-09-29 复核）。
 10. **插件日志通道**：cordis 标准 `ctx.logger`（`ctx.logger('<name>')` 取具名 logger）——插件报错/提示统一走它（2026-09-29 复核）。
 11. **`DSH_HOME` 解析语义**：`resolveDshHome()` = 显式配置 → `$DSH_HOME` → `~/.dsh`（`packages/util/home-paths`；含 `~` 展开与绝对化）——插件自持文件路径需与之一致（2026-09-29 复核）。
+12. **插件日志可见性（踩坑）**：`ctx.logger('<name>')` 是 cordis 标准通道，但 **stock bundle 未挂 console exporter**——运行时 `.warn/.error` **不会**出现在 `dsh web` 的 stdout（仅 app-boot 的 diagnostics exporter 收集启动期 warn/error，`warning: N entries did not activate` 即来自它）。→ 要「给人看的日志」需显式挂 logger 行，或改走 **durable 审计事件**（Phase 3 的 429 退避/降级提示应走后者）。
+13. **会话事件订阅与每轮收尾钩子**：插件可 `ctx.on('session/event', (session, event) => …)` 订阅（回调直接拿到 live Session）；`agent/turn-stopping` 是 **serial** 派发，payload `{ agent, turn, signal }`，在轮次关闭**之前**运行（`core/agent-loop/src/agent.ts:359-362`）→ 可在**开放轮次内**用 `agent.session` 追加事件。现成范例：`deliverables/workspace-changes/src/{index,recorder}.ts`。
+14. **⛔ out-of-tree 插件不能追加「新事件类型」（Phase 3 审计的硬约束，2026-09-29 实测）**：
+    - **读侧**：`session-persistence` 按**仓库内生成的静态白名单** `KNOWN_SESSION_EVENT_TYPES`（`core/session/src/known-event-types.ts`）准入；不在表内且**无 `ignorable: true`** 的事件 → **整条日志被拒绝解读**（`session-persistence/src/storage-contract.ts`）。
+    - **写侧**：`Session.append(type, data)` **没有 `ignorable` 透传入口**（`core/session/src/index.ts:722`）。官方插件实践直言：**不要用新事件类型 append**，改用「从既有事件派生」或「插件自有存储」（`preset/agent-preset/skills/cordis-plugin-development/references/practices.md`）。
+    - **实测**：在 `agent/turn-stopping` 里 `agent.session.append('persona/state-diff', {...})` → 追加**成功**（日志出现 seq=64、**无 `ignorable`**）；重启进程重开会话 → `Failed to load history: … contains event type "persona/state-diff" (seq 64) unknown to this harness and not marked ignorable; refusing to interpret the log`（**整个会话不可加载**）。
+    - **写路径穷举（2026-09-29 补测）**：冷路径 `ctx.sessionPersistence.open(id,'write')` 的 `SessionHandle.append(events)` 虽接受完整事件（含 `ignorable`），但 seam **单写者**、活会话写句柄已被 agent-loop 持有 → 探针实测 `SessionAlreadyOwnedError: … already owned by an active write handle`。故**无任何受支持的活写路径**。
+    - **结论**：CONCEPTS §5.3 原计划「合并 `SessionEventMap` 追加 `memory/recall` / `persona/state-diff` / `decision/attribution`」在本版本**对 out-of-tree 插件不可行**；审计须落**插件自有持久化**，或从既有事件派生——而「已落 `system/message` 的提示词变更」本身就是「效果」的可回放证据（Trajectory 的 Prompt Diff 即此）。
 
 ## 3. 注意事项与坑
 
@@ -87,8 +95,8 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 目标 = 「模型接入 + 能力面裁剪」两件事：
 
 1. **模型接入**：`llm-pi-ai.providers` 追加 `geek-tech-club`（`.env`: `GEEK_TECH_CLUB_API_KEY`）；默认模型暂保持 `deepseek-official`；「切换为 .env 端点」的开关以注释形式预留（评委场景建议开启）。**baseURL 亦来自 `.env`（`LEPI_LLM_BASE_URL`，经 `!!js` 读取；已实测：合法表达式启动零错误、非法表达式启动即 `SyntaxError` 快速失败，见根 `HANDOFF.md`「工作区纪律」）。**
-2. **裁剪**：新增 `preset-lepimemory`（persona 占位 / tool-ask-user / tool-web / compaction 暂禁），并把 `agent-preset-registry` 默认指向它；编码向工具不挂载；「行动工具」留给自研插件。
-3. **人设**：preset 的 persona 行按 per-agent 遮蔽部署级「coding agent」文案（无需改全局 `system-prompt`）；正式人设文本由自研插件在 Phase 1 通过 PERSONA 槽位接管。
+2. **裁剪**：新增 `preset-lepimemory`（persona 正式文本 / tool-ask-user / tool-web / compaction 暂禁），并把 `agent-preset-registry` 默认指向它；编码向工具不挂载；「行动工具」留给自研插件。
+3. **人设**：preset 的 persona 行按 per-agent 遮蔽部署级「coding agent」文案（无需改全局 `system-prompt`）；**正式人设文本已落地在该行的 `prefix`**（见 `artifacts/persona-injection.md`）。
 
    ⚠️ **persona 遮蔽是必须项，不是美化项**——A/B 实验直接提供了证据：
    `artifacts/ab-fake-persona.md` 状态 B 的回复里，模型自称
@@ -110,7 +118,7 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - `.env.example` —— Hindsight key + dsh 端点 key；全部可留空（零 key 路径）。
 - `Makefile` —— `dev / stop / clean / reset`；`dev` = compose 等健康检查 → dsh 前台启动；`DSH_HOME` 默认 `./.dsh`。
 - `.gitignore` —— `.env` / `.dsh/` / `node_modules/`。
-- `README.md`、`docs/DEMO.md` —— 骨架草稿（待定稿）。
+- `README.md`、`docs/DEMO.md`（均已定稿）。
 - 已验证：compose YAML 可解析 ✅、`make -n dev` 命令序列正确 ✅、profile 沙盒启动链路 ✅、
   **完整 `make dev` ✅**（本机 3181 冒烟：401 → 200；插件行入组合树）。
 - 测试中发现并修复两处（2026-09-28）：① `install-profile` 缺依赖物化 → 增加
@@ -125,3 +133,6 @@ journalctl --user -u lepimemory-dsh -n 20 | grep token   # 入口链接（重启
 - 2026-09-28 v0.4：`make dev` 全流程实测（含两处修复）；§3.7 更新（compose 已装）。
 - 2026-09-28 v0.5：脱敏与端点环境变量化——个人数据改合成示例；`LEPI_LLM_BASE_URL` 经 `!!js` 读取（非法表达式快速失败已实测）；工作区纪律见根 `HANDOFF.md`。
 - 2026-09-29 v0.6：复核补 §2.9–2.11（`section.text` 函数形式 / `ctx.logger` / `DSH_HOME` 解析语义）与 headless 测试台构成，供 Phase 3 状态持久化实现。
+- 2026-09-29 v0.7：补 §2.12 日志可见性踩坑（stock bundle 无 console exporter）；Phase 3 第一步（状态持久化）已实现并验收，见 `artifacts/state-persistence.md`。
+- 2026-09-29 v0.8：补 §2.13–2.14（会话事件订阅 + 每轮收尾钩子；**out-of-tree 不能追加新事件类型**，实测重载拒绝）。据此改写 `CONCEPTS.md §5.3` 审计落点。
+- 2026-09-29 v0.9：§2.14 补「写路径穷举」——冷路径 `ctx.sessionPersistence.open(id,'write')` 亦被单写者拒绝（探针实测 `SessionAlreadyOwnedError`），坐实「**无受支持活写路径**」。

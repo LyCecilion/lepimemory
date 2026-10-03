@@ -6,8 +6,8 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `profiles/lepimemory/` | 项目 profile：模型接入 + 能力面裁剪（agent preset）+ 状态覆盖 |
-| `plugins/dsh-lepimemory-state/` | 最小「状态注入」插件（Phase 1 实验）：注册一个 system prompt section |
+| `profiles/lepimemory/` | 项目 profile：模型接入 + 能力面裁剪（agent preset） |
+| `plugins/dsh-lepimemory-state/` | 角色状态插件：持久化 JSON 状态（`state.json`）+ 事件驱动状态机 + 心境衰减 + 自有审计（`audit.jsonl`），每轮渲染为 system prompt section |
 
 ## 安装 / 使用
 
@@ -31,5 +31,22 @@ systemctl --user restart lepimemory-dsh
 
 ## 现状与待办
 
-- 状态文本目前是**占位**（Phase 2 由状态机动态提供；section 机制不变）
+- **状态持久化（Phase 3 第一步）**：插件读 `<DSH_HOME>/lepimemory/state.json`（补丁层用
+  `!!js dshHomePath('lepimemory/state.json')` 解析；未配置时插件兜底 `$DSH_HOME`/`~/.dsh`）。
+  首次启动自动写入初始状态；每轮组装重读文件 → **手动编辑该文件即可改状态，无需重启**。
+  坏 JSON / 坏字段会报错（含字段路径），不静默回落、不改写坏文件；运行中改坏则记日志并沿用上次有效状态。
+- **状态机 v1（事件驱动 + 衰减 + 自有审计）**：插件订阅 `session/event`，在 `turn/end` 收尾时推进状态——
+  - 规则是**显式数据**（`lib/machine.js` 的 `RULES`，纯函数 `(facts) => deltas`）；v1 只含 2 条机制验证规则（用户说话→熟悉度 +0.02；工具失败→心境 −0.08、信任 −0.02）；
+  - **心境按 6h 半衰期向基线回归**，关系不衰减；
+  - 每次变更写 `state.json` + 追加 `audit.jsonl`（`{时刻, 轮次, 命中规则, 维度前→后}`，人可读）。
+  - ⚠️ **不往 session log 加自定义事件**（out-of-tree 会破坏会话重载，见 `docs/research/artifacts/session-event-spike.md`）——
+    「效果」靠已落的 `system/message` Prompt Diff，「原因」靠自有 `audit.jsonl`（`CONCEPTS.md §5.3`）。
+- **正式人设（Phase 1 占位债已清偿）**：profile 的 preset `persona` 行换成完整人设（身份内核 + 说话方式 + 边界），
+  经 persona 包注册为 agent 作用域的 persona prefix/suffix（`suffix: ''` = 遮蔽全局后缀，不显示工作目录等）。
+  A/B 实测：不再自称 AI/助手，也不再冒「工作目录/跑命令」的编码助手口吻（证据 `docs/research/artifacts/persona-injection.md`）。
+  文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
+- **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace)`）→ **归因筛选**（分数阈值 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
+- **记忆写路径（v1.1）**：`turn/end` 收尾时对本轮**用户陈述**做写入判断（过短/**疑问**/**请求**/寒暄跳过 + 内容去重）→ Hindsight `retain`（`concise` 抽取）+ `trust:fact` 标签；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算，retain 非幂等故**不重试**）。experience/推断档待接。
+- **遗忘 + 恢复（工具 + 审批）**：注册 **`forget` 工具**（**由模型调用**，不从消息跑正则）→ 先 recall 出受影响记忆 → **`ctx.approval` 结构化确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（S1 检索抑制）；对称的 **`restore_memory` 工具**做撤销（ids 从 `forget.jsonl` 读回，同样经审批）。只切**文本提到目标**的候选；审计 `forget.jsonl`。工具注册在根上下文即可达每个 agent（`request/header.tools` 已实测含二者）。
+- **待办（Phase 3 后续）**：真实行动工具 + 审批；规则集与量级实测；状态面板（client 插件）。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

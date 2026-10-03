@@ -2,22 +2,33 @@
     "name": "@dsh-external/dsh-lepimemory-state",
     "version": "0.0.1",
     "private": true,
-    "description": "Lepimemory 最小状态注入插件（Phase 1 实验）：把一个硬编码的状态文本注册为 system prompt section。",
+    "description": "Lepimemory 角色运行时插件：持久化状态 + 事件驱动状态机 + 心境衰减 + 自有审计 + 记忆桥（Hindsight 召回/写入）+ `forget` 遗忘工具（ctx.approval 确认）+ `write_note` 行动工具 + 状态面板（client 半）。",
     "type": "module",
     "main": "./lib/index.js",
     "exports": {
         ".": {
             "default": "./lib/index.js"
-        }
+        },
+        "./client": "./client.js"
     },
     "files": [
         "lib",
+        "client.js",
         "cordis.patch.yml"
     ],
     "dsh": {
         "manifestVersion": 1,
         "bundle": {
             "patch": "./cordis.patch.yml"
+        },
+        "client": {
+            "platform": "web",
+            "inject": [
+                "@deepseek-ai/dsh-client-ui-renderer",
+                "@deepseek-ai/dsh-client-ui-conversation",
+                "@deepseek-ai/dsh-client-ui-session",
+                "@deepseek-ai/dsh-client-locale"
+            ]
         }
     }
 }
