@@ -38,12 +38,12 @@
             name: glm-5.3
 
 # 评委场景建议（待定）：把默认模型切到 .env 端点——评审机只需配一个 key。
-# 本地开发若想继续用官方账号（deepseek-official），保持注释即可。
-# - id: agent-default-model
-#   name: '@deepseek-ai/dsh-agent-default-model'
-#   config:
-#     provider: geek-tech-club
-#     model: deepseek-flash
+# 默认已切到 geek-tech-club 端点（不用官方账号，省钱）；想改回官方账号请注释掉下面这段。
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: geek-tech-club
+    model: deepseek-flash
 
 # ── 2) 能力面裁剪：lepimemory 专用 agent preset ──────────────────
 # 说明：
