@@ -2,7 +2,7 @@
     "name": "@dsh-external/dsh-lepimemory-state",
     "version": "0.0.1",
     "private": true,
-    "description": "Lepimemory 角色运行时插件：持久化状态（state.json）+ 事件驱动状态机 + 心境衰减 + 自有审计（audit.jsonl）+ 记忆桥（Hindsight 召回→归因→注入，recall.jsonl）。",
+    "description": "Lepimemory 角色运行时插件：持久化状态 + 事件驱动状态机 + 心境衰减 + 自有审计 + 记忆桥（Hindsight 召回/写入）+ `forget` 遗忘工具（ctx.approval 确认）。",
     "type": "module",
     "main": "./lib/index.js",
     "exports": {

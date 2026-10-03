@@ -96,8 +96,8 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   实测：合成记忆「10 月 7 日见重要的人」被正确召回并**驱动回答**（web，0 工具调用）。证据 `docs/research/artifacts/memory-recall.md`。**待续**：`retain` 写路径。
 - ✅ **记忆写路径 v1**（2026-09-29）：`turn/end` 收尾 → 本轮**用户陈述**做写入判断（过短/寒暄跳过）→ `retain`（`concise` 抽取 + `trust:fact` 标签）+ `retain.jsonl` 审计；**fire-and-forget**，recall/retain **预算分开**（3s / 30s）。
   实测：「团子」「插画」由对话写入、随后可被 recall 命中。证据 `docs/research/artifacts/memory-write.md`。**待续**：experience/推断档。
-- ✅ **遗忘 v1**（2026-09-29）：`agent/pre-step` 识别「忘掉 X」→ **计划预览**（notice）→ 用户普通消息确认 → `invalidate`（S1，可撤销）；只抑制**文本提到目标**的候选；审计 `forget.jsonl`；**不越过用户确认**。
-  实测：忘「团子」→ 计划列 1 条（排除误匹配的「香菜」）→ 确认 → 团子 0 命中、香菜未动。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具化 + 审批（子集可选）。
+- ✅ **遗忘（工具化 + 审批）**（2026-10-03）：注册 **`forget` 工具**（模型调用）→ recall 取受影响记忆 → **`ctx.approval`** 结构化确认 → 同意才 `invalidate`（可 revert）。**废除了早期的「正则识别」方案**（会误伤「永远不会忘记你」、误判「嗯…对了」为确认）。
+  实测：忘「团子」→ 审批卡「Suppress 1 memories」→ Allow once → 团子 0 命中、香菜未动；审计 `forget.jsonl` + `approval/asked`+`decided`。证据 `docs/research/artifacts/memory-forget.md`。**待续**：工具带 `ids` 支持子集选择。
 
 **Agent 复核发现的两个待办（2026-09-28 晚，写于阶段 1 验收之后）**：
 
@@ -412,9 +412,9 @@ curl -X POST localhost:8888/v1/default/banks/luna/memories/recall \
 | preset 裁剪是配置层还是运行时 | dump 树与 session log 证据矛盾，需再核验写死 | 本文件「Agent 复核」待办 1 |
 | 429 退避策略 | ✅ recall 路径已实现：指数退避（1s/2s/4s）+ 降级 + 审计（`lib/hindsight.js`） | 本文件「Agent 复核」待办 2 |
 | 模型可能用 `tool-web.fetch` 直连 Hindsight、**绕过归因** | 已知风险，待评估收紧 `tool-web` fetch | `docs/research/artifacts/memory-recall.md` 备注 2 |
-| **遗忘**确认匹配过宽 / 请求匹配过宽（`嗯…对了`、`永远不会忘记你` 会被误判） | **未修**，演示前必处理 | `docs/DEVLOG.md` §3 A/B |
-| 遗忘子集不可选（confirm 全量执行 `pending.ids`） | **未修** | `docs/DEVLOG.md` §3 C |
-| 行动工具**可见性未验**（host 注册是否进 preset 会话工具面） | **未修**，做行动工具前先验 | `docs/DEVLOG.md` §3 D |
+| ~~遗忘确认/请求匹配过宽~~ | ✅ **已解决**：遗忘改为 **`forget` 工具 + `ctx.approval`**（无消息级正则） | `docs/DEVLOG.md` §2.4 #11 |
+| 遗忘子集不可选（工具一次抑制「与目标相关」的全部候选） | **未修**；需工具带 `ids` | `docs/research/artifacts/memory-forget.md` |
+| ~~行动工具可见性未验~~ | ✅ **已证**：runtime 根上下文注册的工具会到每个 agent | `docs/DEVLOG.md` §2.2 #7 |
 | 提交安排（排练提交 6054b74 处置 / 提交粒度 / push 时机） | 待确认 | 本文件「Git 状态备忘」 |
 
 ---

@@ -1,50 +1,62 @@
-# Phase 3 遗忘（forget）—— 证据（计划预览 → 确认 → 抑制）
+# Phase 3 遗忘（forget）—— 证据（工具 + 审批，取代正则）
 
-- 日期：2026-09-29
+- 日期：2026-09-29（工具化改造：2026-10-03）
 - 分支：`exp/state-persistence`
-- 模块：`lib/memory.js`（遗忘流程）+ `lib/hindsight.js`（`invalidate` / `revert`）
-- 机制：`agent/pre-step` 里识别遗忘意图 → **计划预览**（注入 `notice`，角色复述并请确认）→ 用户**普通消息**确认后 → `PATCH /memories/{id}` → `invalidated`（Hindsight S1 检索抑制，**可 revert**）；全程**不越过用户确认**。
+- 模块：`lib/memory.js`（`forget` 工具）+ `lib/hindsight.js`（`invalidate`/`revert`）
+- 机制：注册 **`forget` 工具**（**由模型调用**：用户要求忘记时，模型决定调它）→ 先 recall 出**将受影响的记忆** → 经 **`ctx.approval`** 做**结构化用户确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（**可 revert**）。
 
-## 流程
+> **为何不用正则**：早期版本在用户消息上跑正则识别「忘掉 X / 确认 / 取消」——hacky，且会误伤
+> 「我永远不会忘记你」「别忘记我们的约定」，还会把「嗯……对了」误判为确认。**改为工具后**：意图判定交给模型，确认交给 dsh 审批 seam，**两类误判从根上消失**。
 
+## 工具定义（零依赖原始 ToolDefinition）
+
+```js
+ctx.tools.register({
+  name: "forget",
+  description: "把某个对象从长期记忆里“忘掉”（检索抑制，可恢复）。会先列出将受影响的记忆并请用户确认，只有用户同意后才执行。当用户明确要求忘记某人/某事时调用。",
+  parameters: { type: "object", additionalProperties: false, required: ["target"],
+                properties: { target: { type: "string", description: "要忘掉的对象（人名 / 事物 / 说法）" } } },
+  output: { schema: { type: "object", additionalProperties: false,
+                      properties: { target:{type:"string"}, planned:{type:"number"}, executed:{type:"number"},
+                                    outcome:{type:"string"}, memories:{type:"array",items:{type:"string"}} },
+                      required: ["target","planned","executed","outcome","memories"] },
+            render: (_a, v) => [{ type: "text", text: renderForget(v) }] },
+  execute: async (args, exec) => { /* recall → 目标过滤 → approval → invalidate */ },
+})
 ```
-用户：「忘掉团子」
-  → 插件 recall("团子") 取候选 → 朴素 S1 切分（只留**文本提到「团子」**的）→ 注入「计划预览」notice
-  → 角色复述计划 + 在普通回复里问「确认执行吗？」（并被告知不要用提问工具）
-用户：「确认」
-  → 插件逐条 PATCH invalidate → 注入「已执行」notice → 角色告知
-用户：「算了」 → 取消（不执行）
-```
 
-- 意图识别：`detectForgetIntent(text)`（`忘掉/忘记/别再记得` → request；`确认/好的/执行` → confirm；`算了/取消` → cancel）。纯函数，11/11 用例过。
-- **切分**：朴素 S1 —— 只抑制**文本确实提到目标**的候选（`related`）；目标非字面词（如「刚才那个人」）时回退全部候选。这是 `DESIGN_NOTES §2.5`「关于 A vs A 参与」的**回避式**最笨版本。
-- 审计：`forget.jsonl`（plan / executed / cancelled / degraded 全落）。
-- 可撤销：抑制是**冷归档**，`revert` 即恢复（演示里撤销过一次误伤）。
+- **切分**：朴素 S1 —— 只取**文本确实提到目标**的候选（避免误伤；`related`）。
+- **确认**：`ctx.get('approval').request({ agent: exec.agent, toolName:'forget', callId: exec.callId, reason, displayReason:{zh,en}, signal: exec.signal })` → `allowed-once | rejected | cancelled | unavailable`；**非 `allowed-once` 一律不执行**（fail-closed）。
+- `displayReason` 带「将抑制 N 条：<列表>」，审批卡直接展示计划。
 
 ## 实测（web `lepimemory` profile）
 
-| 轮 | 角色（节选） | 结构证据 |
-| --- | --- | --- |
-| 「忘掉团子」 | 「计划是这样的：抑制**一条**记忆，是『你养了一只猫，叫团子，三岁了』这条。只是抑制，不是抹掉……**确认执行吗？**」 | `forget.jsonl`：`{"plan":true,"candidates":2,"selected":1,"ids":["…团子…"]}` |
-| 「确认」 | 「好，照你说的做了。那条已经不在了……只剩一个空的形状，像抽屉被腾干净」 | `forget.jsonl`：`{"executed":1,"failed":0}` |
+1. **工具可见**：会话 `request/header.tools` = `['ask_user_question','forget','web_fetch','web_search']`。
+2. 说「忘掉团子」→ 模型**调用 forget** → 审批卡：**「Suppress 1 memories about "团子" (reversible). / Reject / Allow once」**（只 **1 条**，香菜未被卷入）→ 点 **Allow once**。
+3. 审计：
 
-抑制效果（curl 复核）：`recall("团子")` → **0 命中**；`recall("香菜")` → **2 命中**（无关记忆**未被误伤**）。
+```
+approval/asked   {"id":"…","toolName":"forget","callId":"…","reason":"抑制 1 条关于「团子」的记忆"}
+approval/decided {"id":"…","outcome":"allowed-once"}
+forget.jsonl     {"type":"forget","tool":"forget","target":"团子","planned":1,"executed":1,"outcome":"allowed-once","ids":["…团子…"]}
+```
 
-## 踩到并修掉的两个坑（都实测复现）
+4. 效果：`recall("团子")` → **0 命中**；`recall("香菜")` → **2 命中**（未误伤）。
 
-1. **误抑制**：v1 直接把 recall 候选**全部**抑制 → 把 graph 共现带出的「讨厌香菜」也一起抑制了（角色嘴上却说「只抑制第 1 条」——**言行不一**）。
-   已修：只抑制**文本提到目标**的候选（`selected`），并把它写进计划文案与审计。
-2. **确认渠道**：角色倾向用 `ask_user_question` 工具做确认——但工具答案**不是**普通用户消息，我们的「确认」检测收不到 → 不会执行。
-   已修：计划 notice 明确要求「在**普通回复**里问确认，**不要调用提问工具**」。
+## 工具化过程中踩的坑（已修）
+
+1. **`output.schema` 的 `required` 写法**：必须是**对象级数组** `required:[...]`，逐属性 `required:true` 会被 `assertSupportedJsonSchema` 拒绝（leaf 不支持）。
+2. **`parameters` 必须是显式 object 节点**：裸属性表会被 provider 判为 `type: null` → `Invalid schema for function 'forget'`。用 `{type:'object', properties:{...}, required:[...], additionalProperties:false}`。
+3. **工具可见性**（曾误判）：一度以为 host（bundle）注册的工具进不了 preset 会话。**实测推翻**——注册表是「全局层 + per-scope 层」合并，**runtime 在根上下文注册的工具会到达每个 agent**（此会话 `request/header.tools` 含 `forget` 即证）；之前会话没有 `tool-bash/fs` 是 web bundle 把那些**行 `disabled`** 了，不是 preset 挡的。
 
 ## 坑与备注
 
-- **意图/确认仍是正则**（v1）：复杂表述（「嗯……那还是忘了吧」）可能识别不到；演示剧本用直白措辞。
-- **不可让用户微调子集**：v1 恒为「target 相关」全抑制；「只清这条/连那条也清」需要把遗忘做成**工具**（带 `ids` 参数）+ 审批流——列为升级路径。
-- 「关于 A / A 参与」的语义切分仍是**回避**（候选+确认），未解决（`DESIGN_NOTES §2.5`）。
-- experience 档、「遗忘计划预览」的**前端卡片**未做。
+- **子集仍不可选**：一次调用抑制「与目标相关」的全部候选（`related`）；「只清这条」需工具再带 `ids` 参数。列为升级项。
+- 意图完全交给模型：若模型该调未调（或不该调而调），是**模型判断**问题，非正则误伤；可用描述微调。
+- 「关于 A / A 参与」语义切分仍是**回避**（候选 + 确认）；`DESIGN_NOTES §2.5`。
+- 撤销：`client.revert(id)` 已具备（演示里撤销过误伤）；**尚未接**「用户说恢复」的工具化入口。
 
 ## 结论
 
-- ✅ 「忘掉 X → **计划预览 → 用户确认 → 实际抑制 → 可撤销**」闭环成立；无关记忆不被误伤；全程可审计。
-- 升级路径：遗忘**工具化** + `ctx.approval`（fail-closed），把确认与子集选择交给结构化参数。
+- ✅ 「用户要求忘 → **模型调 forget** → 结构化审批 → 抑制 → 可撤销」闭环成立；审批**成对落审计**；无关记忆不被误伤。
+- 相比正则版：**无消息级误判**、确认走 fail-closed 审批、计划与确认均在结构化通道。

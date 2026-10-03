@@ -38,8 +38,8 @@ export const name = "lepimemory-state";
 /** 状态 section 的排序值：人设 prefix(order 0) 之后、策略段(500) 之前。依据见文件头注释。 */
 export const STATE_SECTION_ORDER = 50;
 
-/** 需要 prompt 注册表就绪后才 apply。 */
-export const inject = ["systemPrompt"];
+/** 需要 prompt 注册表 / 工具注册表就绪后才 apply。 */
+export const inject = ["systemPrompt", "tools"];
 
 /** 审计文件与状态文件同目录。 */
 function auditFileFor(stateFile) {

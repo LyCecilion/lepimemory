@@ -47,6 +47,6 @@ systemctl --user restart lepimemory-dsh
   文本可直接改 `dsh/profiles/lepimemory/cordis.patch.yml`。
 - **记忆桥（召回竖切）**：`agent/pre-step` 里按用户输入召回 Hindsight（`recall(trace)`）→ **归因筛选**（分数阈值 + 条数上限，入选/排除都留理由）→ 注入 `source:{kind:'lepimemory-recall', form:'recall'}` 的 user 消息（落库可回放）；失败**降级为无记忆回答** + `recall.jsonl` 审计。client 在 `lib/hindsight.js`，桥在 `lib/memory.js`；config 在 profile 的 `memory:`（`bank` / `baseUrl` / `minSemantic`）。
 - **记忆写路径（v1.1）**：`turn/end` 收尾时对本轮**用户陈述**做写入判断（过短/**疑问**/**请求**/寒暄跳过 + 内容去重）→ Hindsight `retain`（`concise` 抽取）+ `trust:fact` 标签；**fire-and-forget**，审计 `retain.jsonl`（**recall 前台 3s / retain 后台 30s** 两套预算，retain 非幂等故**不重试**）。experience/推断档待接。
-- **遗忘（v1）**：`agent/pre-step` 识别「忘掉 X」→ **计划预览**（注入 `notice`，角色复述并请确认）→ 用户**普通消息**确认 → `invalidate`（S1 检索抑制，**可撤销**）；只抑制**文本提到目标**的候选（避免误伤）；审计 `forget.jsonl`。**不越过用户确认**（CONCEPTS §6.5 第 5 步）。
+- **遗忘（工具 + 审批）**：注册 **`forget` 工具**（**由模型调用**，不从消息跑正则）→ 先 recall 出受影响记忆 → **`ctx.approval` 结构化确认**（fail-closed，落 `approval/asked`+`approval/decided`）→ 同意才 `invalidate`（S1 检索抑制，**可撤销**）；只切**文本提到目标**的候选；审计 `forget.jsonl`。工具注册在根上下文即可达每个 agent（`request/header.tools` 已实测含 `forget`）。
 - **待办（Phase 3 后续）**：真实行动工具 + 审批；规则集与量级实测；状态面板（client 插件）。
 - 插件依赖用**仓库相对路径**（`link:../../../dsh/plugins/…`），由 `make dev` 的 `install-profile` 自动物化（`dsh plugin --profile lepimemory install`）

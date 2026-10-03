@@ -1,12 +1,13 @@
 /**
- * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）+ 遗忘（计划预览→确认→执行）。
+ * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）+ 遗忘工具（forget）。
  *
  * 读路径：`agent/pre-step` → `await` Hindsight `recall(trace)` → 归因 → 注入 `source:{kind,form:'recall'}` 的 user 消息。
- * 写路径：`session/event` 收尾 → 写入判断（v1.1：长度/疑问/请求/寒暄 + 去重）→ `retain`（concise 抽取）。
- * 遗忘：`agent/pre-step` 里识别「忘掉 X / 确认 / 取消」→ 计划预览（注入 notice，角色复述并请确认）→
- *       确认后 `PATCH /memories/{id}` → `invalidated`（Hindsight S1 检索抑制，可 revert）；全程不越过用户确认。
+ * 写路径：`session/event` 收尾 → 写入判断（长度/疑问/请求/寒暄 + 去重）→ `retain`（concise 抽取）。
+ * 遗忘：注册 `forget` **工具**（由模型调用）——先 recall 出**将受影响的记忆**，再经 `ctx.approval`
+ *       做**结构化用户确认**（fail-closed、落 `approval/asked`+`decided`），同意才 `invalidate`（可 revert）。
+ *       —— **不再对用户消息跑正则**（那是 hacky 且易误伤）。
  *
- * 一切失败都**不阻断**对话；全部落自有审计。
+ * 一切失败都不阻断对话；全部落自有审计。
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -15,13 +16,15 @@ import { HindsightClient, attribute, renderRecall } from "./hindsight.js";
 
 /** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；参考仓内 session-reference 的自定义 kind）。 */
 const RECALL_KIND = "lepimemory-recall";
-const FORGET_KIND = "lepimemory-forget";
+
+/** 遗忘工具名（模型可见）。 */
+const FORGET_TOOL = "forget";
 
 function auditFileFor(stateFile, name) {
     return path.join(path.dirname(stateFile), name);
 }
 
-/** 从进入本步的消息里取「真·用户输入」文本（排除我们自己注入的 recall/forget 消息）。 */
+/** 从进入本步的消息里取「真·用户输入」文本（排除我们自己注入的 recall 消息）。 */
 function userTextOf(messages) {
     return (messages ?? [])
         .filter((m) => m?.source?.kind === "user")
@@ -30,7 +33,7 @@ function userTextOf(messages) {
         .trim();
 }
 
-/** 构造一条注入用的 user 消息（`notice` 需带 `summary`）。 */
+/** 构造一条注入用的 user 消息。 */
 function injectMessage(text, { kind, form, summary }) {
     const source = { kind, form };
     if (form === "notice") source.summary = String(summary ?? text).slice(0, 120);
@@ -50,21 +53,6 @@ export function writeSkipReason(content, minChars) {
     return null;
 }
 
-const FORGET_RE = /(?:忘掉|忘记|别再记得|不要记得|抹掉)\s*([^。.!！?？\n]{0,40})/;
-const CONFIRM_RE = /^\s*(确认|确定|好的?|可以|执行|是的|就这样|动手吧|嗯[，,]?执行)\s*[。.!！~～]?\s*$/;
-const CANCEL_RE = /^\s*(算了|不用了?|取消|先不|别了?)\s*[。.!！~～]?\s*$/;
-
-/** 识别遗忘相关意图。返回 `{kind:'request',target}` / `{kind:'confirm'}` / `{kind:'cancel'}` / null。 */
-export function detectForgetIntent(text) {
-    const t = (text ?? "").trim();
-    if (!t) return null;
-    if (CONFIRM_RE.test(t)) return { kind: "confirm" };
-    if (CANCEL_RE.test(t)) return { kind: "cancel" };
-    const m = t.match(FORGET_RE);
-    if (m) return { kind: "request", target: (m[1] || "").trim() || "（未指明）" };
-    return null;
-}
-
 /** 追加一行 JSON 审计（best-effort）。 */
 function appendAudit(file, entry, logger) {
     try {
@@ -72,6 +60,25 @@ function appendAudit(file, entry, logger) {
         fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
     } catch (err) {
         logger.error("审计写入失败（%s）：%s", file, err.message);
+    }
+}
+
+/** 把遗忘工具结果渲染成模型可见文本。 */
+function renderForget(value) {
+    const list = (value.memories ?? []).slice(0, 8).map((t) => `· ${t}`).join("\n");
+    switch (value.outcome) {
+        case "no-match":
+            return `没有找到与「${value.target}」相关的长期记忆，无需遗忘。`;
+        case "unavailable":
+            return `找到了 ${value.planned} 条关于「${value.target}」的记忆，但**没有可用的确认通道**，未执行（可稍后再试）。`;
+        case "rejected":
+            return `用户**拒绝**了这次遗忘，未执行；${value.planned} 条记忆保持原样。`;
+        case "cancelled":
+            return `遗忘请求被取消，未执行。`;
+        case "allowed-once":
+            return `遗忘已执行：抑制了 ${value.executed}/${value.planned} 条关于「${value.target}」的记忆（可撤销，用户反悔时可恢复）。\n${list}`;
+        default:
+            return `遗忘处理完毕（outcome=${value.outcome}）。`;
     }
 }
 
@@ -105,9 +112,8 @@ export function installMemory(ctx, config, { logger, stateFile }) {
     const injectedTurns = new Map(); // sessionId -> 已注入的 turn（每轮至多注入一次）
     const turnUserText = new Map(); // sessionId -> 本轮用户说过的话（写路径缓冲）
     const recentRetained = new Set(); // 去重
-    const pendingForget = new Map(); // sessionId -> { target, ids }
 
-    // ── 读路径 + 遗忘（都在 pre-step，先忘后召）────────────────────────────
+    // ── 读路径：pre-step 召回 → 归因 → 注入 ─────────────────────────────
     ctx.on(
         "agent/pre-step",
         async ({ agent, turn, signal }, next) => {
@@ -119,87 +125,6 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             const sessionId = String(agent.session.id);
             if (injectedTurns.get(sessionId) === turn) return decision;
 
-            // ── 遗忘：识别 → 计划预览 → 确认执行 / 取消 ──────────────────
-            if (forgetEnabled) {
-                const intent = detectForgetIntent(query);
-                if (intent) {
-                    const pending = pendingForget.get(sessionId);
-                    const addNotice = (text, summary) => ({
-                        ...decision,
-                        messages: [...decision.messages, injectMessage(text, { kind: FORGET_KIND, form: "notice", summary })],
-                    });
-
-                    if (intent.kind === "confirm" && pending) {
-                        let done = 0;
-                        let failed = 0;
-                        for (const id of pending.ids) {
-                            try {
-                                await client.invalidate(id, { signal });
-                                done += 1;
-                            } catch {
-                                failed += 1;
-                            }
-                        }
-                        pendingForget.delete(sessionId);
-                        appendAudit(forgetAudit, {
-                            type: "forget", at: new Date().toISOString(), session: sessionId, target: pending.target,
-                            executed: done, failed, ids: pending.ids,
-                        }, logger);
-                        injectedTurns.set(sessionId, turn);
-                        return addNotice(
-                            `遗忘已执行：已抑制 ${done} 条关于「${pending.target}」的记忆${failed ? `（${failed} 条失败）` : ""}。可撤销。`,
-                            `遗忘已执行：${done} 条`,
-                        );
-                    }
-                    if (intent.kind === "cancel" && pending) {
-                        pendingForget.delete(sessionId);
-                        appendAudit(forgetAudit, {
-                            type: "forget", at: new Date().toISOString(), session: sessionId, target: pending.target, cancelled: true,
-                        }, logger);
-                        injectedTurns.set(sessionId, turn);
-                        return addNotice("遗忘已取消，什么都没删。", "遗忘已取消");
-                    }
-                    if (intent.kind === "request") {
-                        let plan;
-                        try {
-                            plan = await client.recall(intent.target, { trace: false, signal });
-                        } catch (err) {
-                            appendAudit(forgetAudit, {
-                                type: "forget", at: new Date().toISOString(), session: sessionId, target: intent.target,
-                                degraded: true, error: String(err?.message ?? err),
-                            }, logger);
-                            injectedTurns.set(sessionId, turn);
-                            return addNotice("记忆服务暂时不可达，没法生成遗忘计划。稍后再试。", "遗忘计划生成失败");
-                        }
-                        const { picked } = attribute(plan?.results, { minSemantic: 0.2, maxItems: 20 });
-                        // 朴素 S1 切分：只留**文本确实提到目标**的候选（避免把无关的检索噪声一起抑制）；
-                        // 目标不是字面词（如「刚才那个人」）时回退为全部候选。
-                        const target = intent.target;
-                        const related = picked.filter((m) => String(m.text ?? "").includes(target));
-                        const selected = related.length > 0 ? related : picked;
-                        const ids = selected.map((m) => m.id);
-                        pendingForget.set(sessionId, { target, ids });
-                        appendAudit(forgetAudit, {
-                            type: "forget", at: new Date().toISOString(), session: sessionId, target,
-                            plan: true, candidates: picked.length, selected: selected.length, ids,
-                        }, logger);
-                        const list = selected.slice(0, 10).map((m) => `- ${m.text}`).join("\n");
-                        const text = [
-                            "【遗忘计划预览（待用户确认）】",
-                            `用户请求忘掉「${intent.target}」。将抑制 ${selected.length} 条相关记忆（可撤销，不是永久删除）：`,
-                            list || "（无匹配，可能无需处理）",
-                            "",
-                            "请把这份计划用你自己的话向用户复述，并在**普通回复里**直接问「确认执行吗？」——",
-                            "**不要调用提问工具**（否则我收不到确认）。用户下一条普通消息回复「确认」时我会执行，回复「算了」则取消。",
-                            "**在收到确认前，不要声称已经忘记。**",
-                        ].join("\n");
-                        injectedTurns.set(sessionId, turn);
-                        return addNotice(text, `遗忘计划预览：${picked.length} 条`);
-                    }
-                }
-            }
-
-            // ── 召回 → 归因 → 注入 ────────────────────────────────────────
             const started = Date.now();
             let response;
             try {
@@ -225,14 +150,99 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             injectedTurns.set(sessionId, turn);
             return {
                 ...decision,
-                messages: [
-                    ...decision.messages,
-                    injectMessage(renderRecall(picked), { kind: RECALL_KIND, form: "recall" }),
-                ],
+                messages: [...decision.messages, injectMessage(renderRecall(picked), { kind: RECALL_KIND, form: "recall" })],
             };
         },
         { prepend: true },
     );
+
+    // ── 遗忘工具：模型调用 → 计划 → ctx.approval 确认 → 抑制 ───────────────
+    if (forgetEnabled && ctx.tools) {
+        ctx.effect(
+            () =>
+                ctx.tools.register({
+                    name: FORGET_TOOL,
+                    description:
+                        "把某个对象从长期记忆里“忘掉”（检索抑制，可恢复）。会先列出将受影响的记忆并请用户确认，只有用户同意后才执行。当用户明确要求忘记某人/某事时调用。",
+                    parameters: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            target: { type: "string", description: "要忘掉的对象（人名 / 事物 / 说法）" },
+                        },
+                        required: ["target"],
+                    },
+                    output: {
+                        schema: {
+                            type: "object",
+                            additionalProperties: false,
+                            properties: {
+                                target: { type: "string" },
+                                planned: { type: "number" },
+                                executed: { type: "number" },
+                                outcome: { type: "string" },
+                                memories: { type: "array", items: { type: "string" } },
+                            },
+                            required: ["target", "planned", "executed", "outcome", "memories"],
+                        },
+                        render: (_args, value) => [{ type: "text", text: renderForget(value) }],
+                    },
+                    execute: async (args, exec) => {
+                        const target = String(args?.target ?? "").trim();
+                        if (!target) throw new Error(`${FORGET_TOOL} 需要非空的 target`);
+
+                        let response;
+                        try {
+                            response = await client.recall(target, { trace: false, signal: exec.signal });
+                        } catch (err) {
+                            throw new Error(`记忆服务不可达，无法生成遗忘计划：${err?.message ?? err}`);
+                        }
+                        const { picked } = attribute(response?.results, { minSemantic: 0.3, maxItems: 20 });
+                        // 朴素 S1 切分：只取**文本确实提到目标**的候选（避免误伤无关片段）。
+                        const selected = picked.filter((m) => String(m.text ?? "").includes(target));
+                        const memories = selected.map((m) => String(m.text ?? ""));
+                        if (selected.length === 0) {
+                            return { target, planned: 0, executed: 0, outcome: "no-match", memories: [] };
+                        }
+
+                        const approver = ctx.get ? ctx.get("approval") : undefined;
+                        if (!approver) {
+                            return { target, planned: selected.length, executed: 0, outcome: "unavailable", memories };
+                        }
+                        const outcome = await approver.request({
+                            agent: exec.agent,
+                            toolName: FORGET_TOOL,
+                            callId: exec.callId,
+                            reason: `抑制 ${selected.length} 条关于「${target}」的记忆`,
+                            displayReason: {
+                                zh: `将抑制 ${selected.length} 条关于「${target}」的记忆（可恢复）：\n${memories.slice(0, 5).map((t) => `· ${t}`).join("\n")}`,
+                                en: `Suppress ${selected.length} memories about "${target}" (reversible).`,
+                            },
+                            ...(exec.signal ? { signal: exec.signal } : {}),
+                        });
+                        if (outcome !== "allowed-once") {
+                            return { target, planned: selected.length, executed: 0, outcome, memories };
+                        }
+
+                        let done = 0;
+                        for (const m of selected) {
+                            try {
+                                await client.invalidate(m.id, { signal: exec.signal });
+                                done += 1;
+                            } catch {
+                                /* 单条失败不中断 */
+                            }
+                        }
+                        appendAudit(forgetAudit, {
+                            type: "forget", at: new Date().toISOString(), tool: FORGET_TOOL, target,
+                            planned: selected.length, executed: done, outcome, ids: selected.map((m) => m.id),
+                        }, logger);
+                        return { target, planned: selected.length, executed: done, outcome, memories };
+                    },
+                }),
+            "lepimemory.forget()",
+        );
+    }
 
     // ── 写路径：本轮用户说的话 → 写入判断 → retain ────────────────────────
     if (retainEnabled) {
@@ -254,7 +264,6 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             if (!texts || texts.length === 0) return;
 
             const content = texts.join("\n").trim();
-            // ① 写入判断（长度 / 疑问 / 请求 / 寒暄）→ 不写
             const skipReason = writeSkipReason(content, retainMinChars);
             if (skipReason) {
                 appendAudit(retainAudit, {
@@ -263,7 +272,6 @@ export function installMemory(ctx, config, { logger, stateFile }) {
                 }, logger);
                 return;
             }
-            // 去重：同内容不重复写
             const key = content.replace(/\s+/g, "");
             if (recentRetained.has(key)) {
                 appendAudit(retainAudit, {
@@ -274,7 +282,6 @@ export function installMemory(ctx, config, { logger, stateFile }) {
             }
             recentRetained.add(key);
             if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
-            // ② 交 Hindsight concise 抽取；③ 信任等级以 tags 标注。fire-and-forget（给足预算）。
             const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
             client
                 .retain([{ content, context: "用户说的话", tags: ["origin:user-turn", "trust:fact"] }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
@@ -289,5 +296,5 @@ export function installMemory(ctx, config, { logger, stateFile }) {
         });
     }
 
-    logger.info("记忆桥已装载：%s（bank=%s，retain=%s，forget=%s）", client.baseUrl, client.bank, retainEnabled ? "on" : "off", forgetEnabled ? "on" : "off");
+    logger.info("记忆桥已装载：%s（bank=%s，retain=%s，forgetTool=%s）", client.baseUrl, client.bank, retainEnabled ? "on" : "off", forgetEnabled ? "on" : "off");
 }
