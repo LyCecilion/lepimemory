@@ -4,9 +4,9 @@
  * 原则（CONCEPTS §2 决策三 / DESIGN_NOTES §1.6）：
  *   - 规则是**显式数据**，纯函数 (facts) -> deltas，可列举、可测、可审；
  *   - **模型文本不直接写状态**——只吃结构事件（用户是否说话、工具是否失败）；
- *   - 每次变更产出「前值→后值 + 命中规则」，由 index.js 落自有 audit.jsonl。
+ *   - 每次变更产出「前值→后值 + 命中规则」，由 state-runtime.js 原子结算及审计。
  */
-import { BASELINE, NUMERIC_FIELDS } from "./state.js";
+import { BASELINE, NUMERIC_FIELDS, STATE_CAUSES } from "./state.js";
 
 const RANGE = new Map(NUMERIC_FIELDS.map(([p, lo, hi]) => [p, [lo, hi]]));
 
@@ -38,14 +38,17 @@ export const RULES = [
         why: "本轮角色成功办成一件事 → 心境上扬、更亲近（行动结果作为经历）。",
         when: (facts) => facts.actionSuccesses > 0,
         deltas: { "mood.valence": 0.12, "relation.closeness": 0.03 },
-        reason: "刚刚帮你把事办成了。",
+        // 中性描述 + 代码在应用时写入真实 at（不写「刚刚」，避免旧因被读成新鲜事件）。
+        reason: STATE_CAUSES.action.text,
     },
     {
         id: "tool.failure.dampen",
-        why: "本轮有工具失败 → 心境下降、信任略降（失败作为「经历」进入状态机，CONCEPTS §4.4）。",
+        why: "本轮有真实工具失败 → 心境下降（失败作为「经历」进入状态机，CONCEPTS §4.4）。",
+        // 只降心境：审批拒绝/取消/unavailable 与一般控制错误不算工具失败，
+        // 且不因一次失败下调对用户的长期信任（trust 只由明确的用户证据改变）。
         when: (facts) => facts.toolFailures > 0,
-        deltas: { "mood.valence": -0.12, "relation.trust": -0.04 },
-        reason: "刚才有个操作没成。",
+        deltas: { "mood.valence": -0.12 },
+        reason: STATE_CAUSES.failure.text,
     },
 ];
 
