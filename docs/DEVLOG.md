@@ -287,3 +287,14 @@
 - D7 恢复同一3212直通连接后，完整元数据 trace 只有首个 op37d1ca2c的一次 retain POST；后台真实 GET 同一 op HTTP200、文档/两种 raw state 列表，并 PATCH 原 raw3258ba1e HTTP200。首个 candidate 仍 forgotten、write 仍 cancelled，curate3a6763d0已 reconciled；共享后端实际 valid raws=0、原3258ba1e invalidated、原 op 已 completed，未复活已明确恢复的旧偏好。第二任务通过真实 Task 页逐页找到→Details 核验原 UUID/opId→Retry task，不重发正文：实际 GET 原 e093c525 HTTP200，原生状态是 not_found（不是伪造HTTP404），其文档真实404；同一任务与 lifecycle 均 unknown。面板与系统回执实际“结果不明”，详情保留完整原 opId，未报 written；截图 `/tmp/lep-demo-D7-write-unknown.png` 已读取。第二 op 在全 trace 中零 retain POST，首个没有第二POST。恢复后的首条自然问候在第三个方面匹配遇真实 process HTTP429，保守 resubmit_required/audit1141；已新发独立问候，实际角色 transport 的无回流证明继续核对，不把 backend 清理完成冒充整段 D7 已验收。
 - D7 最后一条新发 request `8d3e5e4c-a8b5-477d-abb4-5d9946e9d462` checked/audit1146，实际角色 HTTP200 at1791213213038：case-insensitive 检查无 ASYNC_RECOVERY_DEMO_TOKEN、无 unknown 的 UNACKED_RECOVERY_DEMO_TOKEN、无旧纸桥/2026-10-03，仍有蝶忆身份与有效低落状态，实际自然回复已观测；D7 的指定验收完成。用户随后明确要求砍掉非必要剩余工作并收束：不继续 D8 独立演示、后端比较或额外故障场景，不宣称 D0–D8 全套通过。最终 `make verify` 实际93/93通过，SQLite rollback/reopen/单写者/不可变快照等 CLI smoke 通过（artifact1534）。同一 home/bank 的最终实例已移除全部临时角色/处理/备用/记忆服务连接覆盖，恢复原始配置；三组临时直通代理已停止，共享服务、全部 homes/banks/volumes 与原始审计保留。直接原连接的最终 smoke 与临时脚本清理正在完成。
 - 收尾完成：全部临时代理停止后，原始直连配置的实际输入 `89613992-2e7e-4774-8179-34b7604fa0dc` checked/audit1154，角色真实自然回复“嗯，你好。我在的。”，core=true；最终截图 `/tmp/lep-demo-final-original-route.png` 已读取。随后停止本轮拥有的最终测试实例并关闭管理浏览器；12个临时文本探针/日志/诊断脚本及1个诊断可执行文件清除，未清空任何 home/bank/volume，也未执行陈旧 PID 诊断程序。保留截图、批准快照、原始审计、合成测试数据及真实 unknown 身份；不伪造其已写入。用户指定收束范围内的工作已结束，不再延长 D8 或追加场景。
+
+## 2026-10-05：面向观众的机制导览
+
+- 新增 `docs/MECHANISM.md`：一分钟开场白、页面各区域与八个历史标签读法、状态/任务/候选身份区别、角色与处理模型/laya/Hindsight/SQLite 分工、写入与召回闭环、真实行动和状态规则、压缩/遗忘/恢复边界、逐屏讲解路线及源码地图。README 与 DEMO 增加入口。
+- 依据当前页面渲染、计数 SQL、前置控制、真实回执、准入与状态规则核对；明确 Core 不等于外部服务全健康、grants.active 不等于当前授权可用、reconciled 须按任务类型解释、用户陈述不等于外部事实验证，以及敏感长期保存控制不等于删除原始聊天日志。
+- 实际 Markdown 渲染 smoke 解析出一个主标题、十个主章节、十张表和三个代码块（其中两个机制图代码块）；25 个本地文档/源码引用存在。仅更新文档，未重启实例、未新增云请求或重新执行运行时验收；示意与演示建议不冒充新运行证据，D8 收束边界保持不变。
+
+## 2026-10-06：Lv1/Lv2 收尾与 develop 集成
+
+- 按题目对齐确认：Lv1 的持续对话/人设/可观察状态，以及 Lv2 的记忆生命周期/真实行动/审计闭环已完成当前单用户、单角色范围。README 明确完成口径；机制导览及其入口纳入收尾提交。D8 完整独立演示与额外后端比较保持此前用户批准的收束，不重新列为待办或宣称通过；Lv2.5 及以上不属于本轮。
+- 本次只做文档收尾与分支集成，不重新启动实例、追加云请求或重复运行已通过的93项行为检查。代码基线来自已验证的 `44ffb7b`；`develop` 是该实验分支的祖先，集成采用 `--no-ff` 保留清晰节点。原先保留的 `CHALLENGE.md`、`HANDOFF.md`、`PLAN.md` 在合并时携带其本地修改，合并后按用户补充指示全部提交到 `develop`；交接与计划首部更新为当前完成状态，题目新增可选等级原样保留。仅本地集成，不自动推送远端。
