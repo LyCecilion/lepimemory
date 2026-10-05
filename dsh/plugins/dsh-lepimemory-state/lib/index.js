@@ -1,184 +1,168 @@
-/**
- * @dsh-external/dsh-lepimemory-state
- *
- * 角色状态插件（Phase 3）：
- *   1) 读一份**持久化、结构化**的状态文件，在每次 prompt 组装时实时渲染成 system prompt section；
- *   2) 状态机（machine.js）吃**结构事件**（用户是否说话、工具是否失败）推进状态 + 心境衰减；
- *   3) 每次变更落一份**自有审计** `<DSH_HOME>/lepimemory/audit.jsonl`（前值→后值 + 命中规则）。
- *
- * 状态文件路径：补丁层 config.stateFile = !!js dshHomePath('lepimemory/state.json')（走 dsh 自身 home 解析：
- * 显式 home > $DSH_HOME > ~/.dsh）；未配置时插件内兜底 $DSH_HOME/~/.dsh 下 lepimemory/state.json。
- * ⚠️ 不用 storages/（那是 storage-json 后端的根）。
- *
- * 为什么审计落自有文件、而不往 session log 加事件：
- *   本版本 out-of-tree 插件**不能**追加新事件类型——Session.append() 无 ignorable 透传，读侧按静态白名单
- *   准入，追加即让整个会话重载被拒（实测见 docs/research/artifacts/session-event-spike.md）。
- *   因此「效果」靠已落的 system/message Prompt Diff，「原因」落自有 audit.jsonl（CONCEPTS §5.3）。
- *
- * ── 关于 section 的 order（重要，不要当魔数改）────────────────────────
- *   dsh 中央分配表中与人设相关的只有 DEPLOYMENT_PERSONA_PREFIX = 0、DEPLOYMENT_PERSONA_SUFFIX = 10200。
- *   这两个常量不可 import；运行时**可取但有意不用**（ctx.systemPrompt.getSectionOrder(...)）——取它会退化为
- *   section 名的 code-unit 比较，让位置取决于词典序巧合。故自持常量 + 写清依据。
- */
-import fs from "node:fs";
-import path from "node:path";
-import { ACTION_TOOLS, installAction, toolResultInfo } from "./action.js";
-import { advance } from "./machine.js";
-import { installMemory } from "./memory.js";
-import { installPanel } from "./panel.js";
-import {
-    defaultStateFile,
-    expandHome,
-    readStateFile,
-    renderState,
-    writeInitialState,
-    writeStateFile,
-} from "./state.js";
+/** Unified SQLite-backed runtime. State follows persona prefix (0), before policy (500). */
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { installAction } from './action.js';
+import { installPanel } from './panel.js';
+import { resolveConfig, applyDerivedEnv } from './config.js';
+import { openStore } from './store.js';
+import { expandHome } from './state.js';
+import { createStateRuntime } from './state-runtime.js';
+import { createEvidenceIndex } from './evidence.js';
+import { createProcessor } from './processor.js';
+import { createAdmission } from './admission.js';
+import { createHistoryCoordinator } from './history.js';
+import { createMemoryRuntime } from './memory.js';
+import { createControl } from './control.js';
+import { HindsightClient } from './hindsight.js';
 
-export const name = "lepimemory-state";
-
-/** 状态 section 的排序值：人设 prefix(order 0) 之后、策略段(500) 之前。依据见文件头注释。 */
+export const name = 'lepimemory-state';
+export const RUNTIME_CONTRACT = 1;
 export const STATE_SECTION_ORDER = 50;
+export const inject = ['systemPrompt', 'tools', 'llm', 'agents', 'sessions',
+    'sessionQuery', 'sessionPersistence', 'sessionProjections', 'agentPresets', 'userQuestions'];
 
-/** 需要 prompt 注册表 / 工具注册表就绪后才 apply。 */
-export const inject = ["systemPrompt", "tools"];
-
-/** 审计文件与状态文件同目录。 */
-function auditFileFor(stateFile) {
-    return path.join(path.dirname(stateFile), "audit.jsonl");
+const require = createRequire(import.meta.url);
+const DSH_VERSION = '0.1.7-rc.2';
+function assertRuntime() {
+    if (process.version !== 'v24.20.0') throw new Error('LEPI_NODE_VERSION_MISMATCH');
+    for (const dependency of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm',
+        '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session',
+        '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-system-prompt']) {
+        if (require(`${dependency}/package.json`).version !== DSH_VERSION)
+            throw new Error('LEPI_CORE_VERSION_MISMATCH');
+    }
 }
 
-/**
- * 注册状态 section + 状态机。
- * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{ stateFile?: string }} [config]
- */
-export function apply(ctx, config) {
-    const logger = ctx.logger("lepimemory-state");
-    const file =
-        config && typeof config.stateFile === "string" && config.stateFile.length > 0
-            ? expandHome(config.stateFile)
-            : defaultStateFile();
-    const auditFile = auditFileFor(file);
+const RECEIPT_LABELS = new Map([
+    ['pending', '待处理'], ['deferred', '待判定'], ['written', '已核实入库'],
+    ['unknown', '结果不明'], ['failed', '处理失败'], ['rejected', '已拒绝'],
+    ['cancelled', '已取消'], ['expired', '已过期'], ['local_isolating', '正在停止使用'],
+    ['local_isolated', '已停止使用'], ['remote_pending', '后端清理待完成'],
+    ['submitted', '后端处理中'], ['reconciled', '处理完成'], ['revoked', '授权已撤销'],
+    ['restoring', '恢复待核实'], ['queued', '已排队'], ['parked', '暂停待重试'],
+    ['resubmit_required', '请重新发起输入'], ['unavailable', '处理不可用'],
+]);
+const notice = (text, kind) => createUserMessage({ content: [{ type: 'text', text }],
+    source: { kind, form: 'notice', summary: kind } });
 
-    // 启动：文件不存在 → 写初始状态；存在 → 读取校验，失败即抛错（不改写、不回落默认）。
-    if (!fs.existsSync(file)) {
-        writeInitialState(file);
-        logger.info("已写入初始状态：%s", file);
-    }
-    const first = readStateFile(file);
-    if (!first.ok) throw new Error(first.error);
-    let lastGood = first.state;
-    let lastError = null;
+export function apply(ctx, options = {}) {
+    assertRuntime();
+    const config = resolveConfig();
+    // Launcher sets these before pi-ai starts; also make the independently selected routes explicit here.
+    applyDerivedEnv(process.env, config);
+    const logger = ctx.logger(name);
+    const dataRoot = expandHome(options.dataRoot ?? path.join(config.home.dshHome, 'lepimemory'));
+    const dbFile = expandHome(options.databaseFile ?? path.join(dataRoot, 'runtime.sqlite'));
+    const store = openStore({ dbFile, legacyDir: dataRoot });
+    let disposed = false;
+    let sweepTimer = null;
+    const receiptClaims = new Map();
+    const evidence = createEvidenceIndex({ store, sessionQuery: ctx.sessionQuery });
+    const processor = createProcessor({ llm: ctx.llm, store, evidence, routes: {
+        process: config.llm.process, controlFallback: config.llm.controlFallback,
+        limits: config.limits, timeZone: config.timeZone,
+    } });
+    const admission = createAdmission({ config, processor, store });
+    const history = createHistoryCoordinator({ ctx, store, processor, evidence });
+    let control;
+    const memory = createMemoryRuntime({ ctx, config, store, processor, admission,
+        history, evidence, hindsight: new HindsightClient({
+            baseUrl: config.services.hindsight.url, bank: config.bank,
+        }), askPrivate: (candidate, agent, options) => control.askPrivate(candidate, agent, options) });
+    control = createControl({ ctx, config, store, processor, evidence, history,
+        enqueue: input => memory.enqueue(input) });
+    processor.setMemoryReader(memory.readMemory);
+    evidence.setReadableGate(history.isReadable);
+    const state = createStateRuntime({ store });
 
-    const noteFailure = (message) => {
-        if (message !== lastError) {
-            lastError = message;
-            logger.error("%s", message);
-        }
-    };
-
-    // ── 渲染 section：每次 prompt 组装都实时重读状态文件（无需重启）────────
-    ctx.effect(
-        () =>
-            ctx.systemPrompt.section({
-                name: "lepimemory:state",
-                order: STATE_SECTION_ORDER,
-                text: () => {
-                    const read = readStateFile(file);
-                    if (read.ok) {
-                        lastGood = read.state;
-                        lastError = null;
-                    } else {
-                        noteFailure(`状态重读失败，沿用上次有效状态：${read.error}`);
-                    }
-                    return renderState(lastGood);
-                },
-            }),
-        "lepimemory-state.section()",
-    );
-
-    // ── 状态机：吃结构事件，在轮次收尾时推进状态 + 落审计 ──────────────────
-    const turns = new Map(); // sessionId -> { turn, userMessages, toolFailures, actionSuccesses, __pendingActionCalls? }
-
-    function settle(facts) {
-        const read = readStateFile(file);
-        if (!read.ok) {
-            noteFailure(read.error);
-            return;
-        }
-        let result;
-        try {
-            result = advance(read.state, facts, Date.now());
-        } catch (err) {
-            noteFailure(`lepimemory-state: 状态推进失败：${err.message}`);
-            return;
-        }
-        if (!result.changed) return;
-        try {
-            writeStateFile(file, result.state);
-            const entry = {
-                at: result.state.mood.updatedAt,
-                turn: facts.turn,
-                rules: result.fired,
-                changes: result.changes,
-            };
-            fs.appendFileSync(auditFile, `${JSON.stringify(entry)}\n`, "utf8");
-        } catch (err) {
-            noteFailure(`lepimemory-state: 状态/审计写入失败：${err.message}`);
-        }
+    // Creation/status callbacks run inside native maintenance. A timer gives the sweeper
+    // an external owner; never await whenIdle or re-enter append from an event callback.
+    function scheduleSweep() {
+        if (disposed || sweepTimer) return;
+        sweepTimer = setTimeout(() => {
+            sweepTimer = null;
+            if (!disposed) history.sweep().catch(() => logger.error('LEPI_HISTORY_BLOCKED'));
+        }, 0);
+        sweepTimer.unref?.();
     }
 
-    ctx.on("session/event", (session, event) => {
-        try {
-            const id = String(session.id);
-            switch (event.type) {
-                case "turn/start":
-                    turns.set(id, { turn: event.data.turn, userMessages: 0, toolFailures: 0, actionSuccesses: 0 });
-                    break;
-                case "user/message": {
-                    const facts = turns.get(id);
-                    if (facts && event.data?.source?.kind === "user") facts.userMessages += 1;
-                    break;
-                }
-                case "tool/call": {
-                    const facts = turns.get(id);
-                    if (facts && ACTION_TOOLS.has(event.data?.name)) {
-                        facts.__pendingActionCalls ??= new Map();
-                        facts.__pendingActionCalls.set(event.data.callId, true);
-                    }
-                    break;
-                }
-                case "tool/result": {
-                    const facts = turns.get(id);
-                    if (!facts) break;
-                    const info = toolResultInfo(event.data?.message);
-                    if (info.isError === true) facts.toolFailures += 1;
-                    if (info.toolCallId && facts.__pendingActionCalls?.get(info.toolCallId) && info.isError !== true) {
-                        facts.actionSuccesses += 1;
-                    }
-                    break;
-                }
-                case "turn/end": {
-                    const facts = turns.get(id);
-                    turns.delete(id);
-                    if (facts) settle(facts);
-                    break;
-                }
-                default:
-                    break;
+    function receipts(sessionId) {
+        const key = `receipts:${sessionId}`;
+        const cursor = Number(store.db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value ?? 0);
+        const rows = store.db.prepare(`SELECT a.id,a.request_id,a.task_id,a.candidate_id,
+            CASE WHEN a.task_id IS NOT NULL THEN t.status ELSE r.status END AS status
+            FROM audit a LEFT JOIN tasks t ON t.id=a.task_id LEFT JOIN requests r ON r.id=a.request_id
+            LEFT JOIN lifecycle l ON l.candidate_id=coalesce(a.candidate_id,t.candidate_id)
+            WHERE a.id>? AND (a.session_id=? OR r.session_id=?)
+            AND (t.kind IN ('write','curate') OR (r.kind<>'check' AND a.task_id IS NULL))
+            AND (l.status IS NULL OR l.status NOT IN ('forgotten','audit_only','superseded'))
+            ORDER BY a.id LIMIT 32`).all(cursor, sessionId, sessionId);
+        const unique = new Map();
+        for (const row of rows) {
+            if (!RECEIPT_LABELS.has(row.status)) continue;
+            unique.set(row.task_id ?? row.request_id, row);
+        }
+        if (!unique.size) return null;
+        const message = notice(`【系统回执；仅描述实际处理状态，不补全记忆正文】\n${[...unique.values()]
+            .map(row => `${row.task_id ? 'task' : 'request'}=${row.task_id ?? row.request_id}: ${RECEIPT_LABELS.get(row.status)}`).join('\n')}`,
+            'lepimemory-receipt');
+        receiptClaims.set(message.id, { key, cursor: rows.at(-1).id });
+        return message;
+    }
+
+    ctx.on('session/event', (session, event) => {
+        evidence.observe(session, event);
+        memory.afterTurn(session, event);
+        state.observe(session, event);
+        if (event.type === 'user/message') {
+            const receipt = receiptClaims.get(event.data?.id);
+            if (receipt) {
+                store.db.prepare(`INSERT INTO meta(key,value) VALUES (?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(receipt.key, String(receipt.cursor));
+                receiptClaims.delete(event.data.id);
             }
-        } catch (err) {
-            noteFailure(`lepimemory-state: 事件处理失败：${err.message}`);
         }
+        if (event.type === 'turn/end') scheduleSweep();
     });
+    ctx.effect(() => ctx.systemPrompt.section({ name: 'lepimemory:state',
+        order: STATE_SECTION_ORDER, text: context => state.text(context) }), 'lepimemory-state.section()');
+    ctx.effect(() => ctx.tools.register(control.tool), 'lepimemory.manage_memory');
+    installAction(ctx, config, { logger, store, dataRoot, evidence });
+    state.reconcileActions();
+    installPanel(ctx, config, { logger, store, coordinator: memory, control, dataRoot });
 
-    // ── 记忆桥：每轮按用户输入召回长期记忆、归因后注入（失败则降级无记忆）──────
-    installMemory(ctx, config, { logger, stateFile: file });
-
-    // ── 行动工具：能产生真实副作用的工具（经 ctx.approval 确认后执行）──────────
-    installAction(ctx, config, { logger, stateFile: file });
-
-    // ── 状态面板：Host 侧 HTTP 路由，供浏览器半面板读状态 ──────────────────
-    installPanel(ctx, config, { logger, stateFile: file });
+    ctx.on('agent/pre-step', (frame, next) => history.beforeStep(frame,
+        () => control.beforeStep(frame, async () => {
+            const epoch = store.policyEpoch;
+            const decision = await next();
+            if (decision.kind === 'reject' || frame.signal.aborted || disposed) return { kind: 'reject' };
+            const users = frame.messages.filter(message => message.source?.kind === 'user');
+            if (!users.length) return decision;
+            const query = users.flatMap(message => message.content ?? [])
+                .filter(block => block.type === 'text').map(block => block.text).join('\n');
+            const messages = [...decision.messages];
+            if (query.trim()) {
+                const recalled = await memory.recall({ query, agent: frame.agent, signal: frame.signal,
+                    epoch, purpose: control.contextFor(frame.agent)?.result.recall_purpose ?? 'current' });
+                if (recalled.text) messages.push(notice(recalled.text, 'lepimemory-recall'));
+            }
+            if (epoch !== store.policyEpoch || frame.signal.aborted || disposed) return { kind: 'reject' };
+            const receipt = receipts(frame.agent.session.id);
+            if (receipt) messages.push(receipt);
+            return { ...decision, messages };
+        })), { prepend: true });
+    ctx.on('agent/request', (frame, next) => history.beforeRequest(frame, next), { prepend: true });
+    ctx.on('agent/created', () => { scheduleSweep(); });
+    ctx.on('agent/status', ({ status }) => { if (status === 'idle') scheduleSweep(); });
+    ctx.on('dispose', async () => {
+        disposed = true;
+        clearTimeout(sweepTimer);
+        await Promise.allSettled([control.dispose(), history.dispose(), memory.dispose()]);
+        evidence.dispose();
+        receiptClaims.clear();
+        store.close();
+    });
+    memory.start();
+    scheduleSweep();
 }

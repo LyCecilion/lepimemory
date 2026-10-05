@@ -1,8 +1,6 @@
 /**
- * 状态的定义、校验、渲染与文件读写。
- * （Phase 3 第一步拆分：从 index.js 抽出，逻辑不变；供 index.js 与 machine.js 复用。）
+ * 状态的纯定义、校验与渲染；持久化由 SQLite store 统一负责。
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -131,6 +129,8 @@ export function validateState(value) {
 const MILD = 0.1; // |Δ| ≥ 0.10 → 「略」
 const STRONG = 0.25; // |Δ| ≥ 0.25 → 「明显」
 const MAX_ITEMS = 3;
+/** 原因的可见窗口：与心境 6h 半衰期对齐。超过它一律不渲染（不把旧因写成「刚刚」）。 */
+const CAUSE_TTL_MS = 6 * 60 * 60 * 1000;
 
 const GROUP_LABEL = { mood: "心境", relation: "对用户" };
 
@@ -167,8 +167,35 @@ const TENDENCY_TEXT = {
 
 const HEADER = "【内部状态（相对你自己基线的偏移；用它调整语气，不要向用户提及本段）】";
 
-/** 把状态对象渲染为一段情境化文本（无数值）。 */
-export function renderState(state) {
+/**
+ * 状态机已知原因 → 其**真正作用**的字段与方向。
+ * 已知原因只在「该字段当前仍显著偏移且方向一致」时才有资格展示：
+ *   - 心境为正（如 +0.78）时不得挂上「有一次操作没有成功」这种负向原因；
+ *   - 只有 arousal 偏移时不得展示只针对 valence 的行动原因。
+ * 非本表的通用原因（例如操作者调整）按其维度组是否仍显著偏移判断，不限定方向。
+ * 规则与渲染共用同一原因定义，不按重复的文案推测方向。
+ */
+export const STATE_CAUSES = {
+    action: { text: "完成了一次行动。", field: "valence", sign: 1 },
+    failure: { text: "有一次操作没有成功。", field: "valence", sign: -1 },
+};
+const MACHINE_CAUSES = new Map(Object.values(STATE_CAUSES).map(cause => [cause.text, cause]));
+
+/**
+ * 把状态对象渲染为一段情境化文本（无数值）。
+ *
+ * @param {object} state 已校验的状态对象。
+ * @param {number} [nowMs] 当前时钟（默认 Date.now）；只用于筛选「近期原因」。
+ *
+ * ── 原因渲染规则（Step10）────────────────────────────────────────────
+ *   - 只保留每个维度组里**最新**且 **≤ CAUSE_TTL_MS（6h）** 的一条原因；
+ *     更旧或未来时间的原因一律不渲染（旧因不得被读成新鲜事件，也不写「刚刚」）。
+ *   - 仅当该维度组**当前仍有显著偏移**（|Δ| ≥ MILD）时才显示其原因；
+ *     基线（无偏移）不输出任何旧原因。
+ *   - 「每组只取最新」保证不会把与当前偏移方向相反的历史原因挂在现状上。
+ */
+export function renderState(state, nowMs = Date.now()) {
+    const atMs = Number.isFinite(nowMs) ? nowMs : Date.now();
     const current = {
         valence: state.mood.valence,
         arousal: state.mood.arousal,
@@ -195,8 +222,37 @@ export function renderState(state) {
         itemsByGroup[dev.group].push(DIMENSION_TEXT[dev.dim][direction][intensity]);
     }
 
+    // 当前仍显著偏移的维度组（含未进入 top-3 的组）；及按字段的偏移量。
+    const deviatingGroups = new Set(deviations.map((dev) => dev.group));
+    const devByField = new Map(deviations.map((dev) => [dev.dim, dev.delta]));
+
+    const latestByGroup = { mood: null, relation: null };
+    for (const reason of state.reasons) {
+        const at = Date.parse(reason.at);
+        if (!Number.isFinite(at) || at > atMs + 1000) continue; // 未来/不可解析：忽略
+        if (atMs - at > CAUSE_TTL_MS) continue; // 超过 6h：不渲染
+        const known = MACHINE_CAUSES.get(reason.text);
+        let relevant;
+        if (known) {
+            const delta = devByField.get(known.field);
+            relevant =
+                typeof delta === "number" &&
+                Math.abs(delta) >= MILD &&
+                Math.sign(delta) === known.sign;
+        } else {
+            // 通用/操作者原因：其维度组仍有显著偏移即可展示（不限定方向）。
+            relevant = deviatingGroups.has(reason.dimension);
+        }
+        if (!relevant) continue;
+        const prev = latestByGroup[reason.dimension];
+        if (!prev || Date.parse(prev.at) < at) latestByGroup[reason.dimension] = reason;
+    }
+
     const reasonsByGroup = { mood: [], relation: [] };
-    for (const reason of state.reasons) reasonsByGroup[reason.dimension].push(reason.text);
+    for (const group of ["mood", "relation"]) {
+        const reason = latestByGroup[group];
+        if (reason && deviatingGroups.has(group)) reasonsByGroup[group].push(reason.text);
+    }
 
     const lines = [HEADER];
     for (const group of ["mood", "relation"]) {
@@ -216,47 +272,9 @@ export function renderState(state) {
     return lines.join("\n");
 }
 
-// ── 文件读写 ─────────────────────────────────────────────────────────
+// ── 路径展开 ─────────────────────────────────────────────────────────
 export function expandHome(p) {
     if (p === "~") return os.homedir();
     if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
     return p;
-}
-
-/** 插件内兜底路径（仅在补丁层未设 stateFile 时使用）：$DSH_HOME（未设 → ~/.dsh）/lepimemory/state.json。 */
-export function defaultStateFile() {
-    const home =
-        process.env.DSH_HOME && process.env.DSH_HOME.length > 0
-            ? expandHome(process.env.DSH_HOME)
-            : path.join(os.homedir(), ".dsh");
-    return path.join(home, "lepimemory", "state.json");
-}
-
-/** 读 + 校验。返回 { ok: true, state } 或 { ok: false, error }（error 含文件路径与字段路径/解析位置）。 */
-export function readStateFile(file) {
-    let raw;
-    try {
-        raw = fs.readFileSync(file, "utf8");
-    } catch (err) {
-        return { ok: false, error: `lepimemory-state: 无法读取状态文件（${file}）：${err.message}` };
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    } catch (err) {
-        return { ok: false, error: `lepimemory-state: 状态文件 JSON 解析失败（${file}）：${err.message}` };
-    }
-    const check = validateState(parsed);
-    if (!check.ok) return { ok: false, error: `${check.error}（${file}）` };
-    return { ok: true, state: parsed };
-}
-
-/** 写状态文件（缩进 JSON + 末尾换行）。 */
-export function writeStateFile(file, state) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-}
-
-export function writeInitialState(file) {
-    writeStateFile(file, initialState());
 }

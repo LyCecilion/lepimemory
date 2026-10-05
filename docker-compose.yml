@@ -1,35 +1,32 @@
-# Lepimemory 部署脚手架 — 草案 v0.1（2026-09-28，待评审）
-# 只负责记忆微服务 Hindsight；dsh 本机跑（见 Makefile 的 `make dev`）。
-# 用法：cp .env.example .env（可留空）→ make dev
-#
-# 说明：
-# - 健康检查打 /health（实测可用，Hindsight v0.10.0）
-# - 首次启动需建 PG + 拉 embedding 模型，可能数分钟（README 有提示）
-# - 端口只绑本机回环，与本机现有部署一致；如需外部访问自行调整
+# Fixed memory services. Run via the verified launcher so resolved connections
+# are injected in memory; existing data/cache volumes and old banks are retained.
 services:
   hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest # 如需可锁版本：...:0.10.0
+    image: lepimemory-hindsight:0.10.0
+    build:
+      context: .
+      dockerfile: deploy/hindsight/Dockerfile
+      # Build-only host network reaches a loopback proxy; runtime stays bridged.
+      network: host
+      args:
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+        HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
+        HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
     container_name: hindsight
     ports:
       - "127.0.0.1:8888:8888" # REST API
       - "127.0.0.1:9999:9999" # 自带 UI（调试记忆时很有用）
     environment:
-      # LLM 端点（由 .env 提供）。key 留空 → 不启用 LLM 调用；
-      # 想完全零 key 运行可设 HINDSIGHT_API_LLM_PROVIDER=none（chunks 模式）。
-      HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-openai}
+      # Missing resolved connection is read-only, never a key sent to a default endpoint.
+      HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-none}
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-}
       HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-}
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-}
-      # ── 检索栈：多语言模型（中文库必需）──────────────────────────
-      # 镜像默认是纯英文模型（bge-small-en + ms-marco-MiniLM），跑中文库会
-      # 分数饱和 + BM25 全 0。换成 384 维多语言模型（匹配 schema 的 Vector(384)，免迁移）。
-      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: ${HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
-      HINDSIGHT_API_RERANKER_LOCAL_MODEL: ${HINDSIGHT_API_RERANKER_LOCAL_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      # 容器连不上 huggingface.co，但连得上 hf-mirror；模型缓存在 hindsight-hf-cache 卷里
-      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
-      # 模型首次需从镜像站下载 → 默认在线；缓存就绪后可设 1 加速启动
-      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
-      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-0}
+      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: /opt/lepimemory-models/embedding
+      HINDSIGHT_API_RERANKER_LOCAL_MODEL: /opt/lepimemory-models/reranker
+      HINDSIGHT_API_STORE_DOCUMENT_TEXT: "true"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
     volumes:
       - hindsight-data:/home/hindsight/.pg0
       - hindsight-hf-cache:/home/hindsight/.cache/huggingface
@@ -47,6 +44,35 @@ services:
       timeout: 5s
       retries: 20
       start_period: 600s # 首次启动慢（建 PG + 拉模型），给足宽限
+
+  laya:
+    image: lepimemory-laya:0.3.26
+    build:
+      context: .
+      dockerfile: deploy/laya/Dockerfile
+      network: host
+      args:
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+        HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
+        HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      LAYA_API_KEY: ${LEPI_LAYA_API_KEY:-}
+      LAYA_MAX_CONCURRENT: "1"
+      LAYA_MAX_TOKEN_BUDGET: "8192"
+      HF_HUB_OFFLINE: "1"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,os,urllib.request; key=os.environ.get('LAYA_API_KEY',''); r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Authorization':'Bearer '+key} if key else {}); h=json.load(urllib.request.urlopen(r, timeout=3)); assert h['revisions']['multilingual']=='1720e3e3357cfe1e281542e223f8273b0890ca34'"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
 
 volumes:
   hindsight-data:

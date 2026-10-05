@@ -1,568 +1,896 @@
-/**
- * 记忆桥：读路径（召回→归因→注入）+ 写路径（retain）+ 遗忘工具（forget）+ 推断工具（remember）。
- *
- * 读路径：`agent/pre-step` → `await` Hindsight `recall(trace, prefer_observations)` → 归因（含**信任档衰减**）
- *         → 注入 `source:{kind,form:'recall'}` 的 user 消息。`prefer_observations` 让冲突**取最新**
- *         （Hindsight 的 observation supersede 原始事实）。
- * 写路径：`session/event` 收尾 → 写入判断（长度/疑问/请求/寒暄 + 去重）→ `retain`（concise 抽取）；
- *         按**信任档**写 `metadata.trust`：`fact`（用户明说）/ `experience`（行动成功）/ `inference`（`remember` 工具）。
- * 遗忘：注册 `forget` **工具**（由模型调用）——先 recall 出**将受影响的记忆**，再经 `ctx.approval`
- *       做**结构化用户确认**（fail-closed、落 `approval/asked`+`decided`），同意才 `invalidate`（可 revert）。
- *       —— **不再对用户消息跑正则**（那是 hacky 且易误伤）。
- * 推断：注册 `remember` 工具，让角色把**自己推断/察觉到**的印象记进长期记忆（信任档 inference，会衰减）。
- *
- * 一切失败都不阻断对话；全部落自有审计。
- */
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { ACTION_TOOLS, toolResultInfo } from "./action.js";
-import { HindsightClient, attribute, renderRecall } from "./hindsight.js";
-import { TRUST } from "./trust.js";
+/** Approved candidate scheduling and verifiable remote work share one supervisor. */
 
-/** 本插件注入来源的 kind（MessageSourceMap 可合并扩展；参考仓内 session-reference 的自定义 kind）。 */
-const RECALL_KIND = "lepimemory-recall";
+import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createWriteWorker } from './write-worker.js';
+import { createCurateWorker } from './curate-worker.js';
+import { loadSource } from './raw-source.js';
+import { createRecaller } from './recall.js';
 
-/** 遗忘工具名（模型可见）。 */
-const FORGET_TOOL = "forget";
-/** 恢复工具名（与 forget 对称：撤销抑制）。 */
-const RESTORE_TOOL = "restore_memory";
-/** 推断工具名（角色主动记下自己的推断，信任档 inference）。 */
-const REMEMBER_TOOL = "remember";
+const NORMALIZE = 'normalize';
+const ADMIT = 'admit';
+const WRITE = 'write';
 
-function auditFileFor(stateFile, name) {
-    return path.join(path.dirname(stateFile), name);
+/** 有界网络退避（毫秒）：最多三次重试 1s/2s/4s，仍失败才 deferred。 */
+const BACKOFF = [1000, 2000, 4000];
+
+/** supervisor 固定 tick（PLAN：唯一 supervisor 2s tick）。 */
+const TICK_MS = 2000;
+
+/** 只处理这些 turn/end reason（rc2 `TurnEndReasonMap`）；其余不算「已交付」的结束。 */
+const DELIVERED_REASONS = new Set(['completed', 'interrupted', 'aborted']);
+
+/** 可被 operator retry 唤醒的终态/停顿态（不复活 cancelled/expired 的政策性终止）。 */
+const RETRYABLE_STATUS = new Set(['deferred', 'unknown', 'failed']);
+
+const GENERIC_CODE = 'LEPI_CONTROL_UNAVAILABLE';
+const RESUBMIT_CODE = 'LEPI_INPUT_RESUBMIT_REQUIRED';
+
+
+function parseJson(text, fallback) {
+  if (typeof text !== 'string') return fallback;
+  try {
+    const value = JSON.parse(text);
+    return Array.isArray(fallback) ? (Array.isArray(value) ? value : fallback)
+      : value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-/** 从进入本步的消息里取「真·用户输入」文本（排除我们自己注入的 recall 消息）。 */
-function userTextOf(messages) {
-    return (messages ?? [])
-        .filter((m) => m?.source?.kind === "user")
-        .flatMap((m) => (m?.content ?? []).filter((b) => b?.type === "text").map((b) => b.text))
-        .join("\n")
-        .trim();
+function arrayEq(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-/** 构造一条注入用的 user 消息。 */
-function injectMessage(text, { kind, form, summary }) {
-    const source = { kind, form };
-    if (form === "notice") source.summary = String(summary ?? text).slice(0, 120);
-    return { id: randomUUID(), role: "user", content: [{ type: "text", text }], source };
-}
-
-/** 从 `tool/call` 的 arguments（JSON 串）里取标题；解析失败返回空串。 */
-function parseTitle(argumentsJson) {
-    try {
-        return String(JSON.parse(argumentsJson)?.title ?? "");
-    } catch {
-        return "";
-    }
+function hashText(text) {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 /**
- * 写路径层①「是否值得写」（v1.1：不只按长度）。
- * ⚠️ 只用**疑问/请求**做排除（保守）：陈述句里偶带「？」少见，宁可漏写一条也不写脏。返回跳过理由或 null。
+ * @param {object} deps
+ * @param {object} deps.ctx
+ * @param {object} deps.config `resolveConfig` 产物。
+ * @param {object} deps.store `openStore` 产物（同步事务；本模块是唯一 writer）。
+ * @param {object} deps.processor `createProcessor` 产物（`extract`/`matchGrant`）。
+ * @param {object} deps.admission `createAdmission` 产物（`evaluate`/`health`）。
+ * @param {object} deps.hindsight Hindsight REST client.
+ * @param {object} deps.history History isolation coordinator.
+ * @param {object} deps.evidence `createEvidenceIndex` 产物（`read`）。
+ * @param {(candidate:object, agent:object)=>Promise<{outcome:string, grant_id:string|null}>} deps.askPrivate
+ * @param {() => number} [deps.now]
+ * @returns {{
+ *   enqueue(input:{request_id?:string|null,session_id:string,source_ids:string[],kind?:string|null,explicit?:boolean}):{task_id:string},
+ *   afterTurn(session:object,event:object):void,
+ *   start():void,
+ *   wake():void,
+ *   retry(taskId:string):({task_id:string,kind:string,status:string,code:string|null,retryable:boolean}|null),
+ *   health():object,
+ *   dispose():Promise<void>,
+ * }}
  */
-export function writeSkipReason(content, minChars) {
-    if (content.length < minChars) return "过短（视为寒暄/噪声）";
-    if (/[?？]/.test(content)) return "疑问句（不写入长期记忆）";
-    if (/^(提醒我|帮我|告诉我|查一下|说一下|讲一下|找一下|看看|问一下)/.test(content)) return "请求句（不写入长期记忆）";
-    if (/(吗|呢|吧)\s*[。.!！~～]?\s*$/.test(content)) return "征询/疑问句（不写入长期记忆）";
-    if (/^(嗯+|哦+|好的?|收到|在吗|谢谢|多谢|哈哈+|嗨+|你好|在么)\s*[。.!！~～]?\s*$/.test(content)) return "寒暄";
-    return null;
-}
+export function createMemoryRuntime({
+  ctx,
+  config,
+  store,
+  processor,
+  admission,
+  hindsight,
+  history,
+  evidence,
+  askPrivate,
+  now = Date.now,
+}) {
+  const db = store.db;
+  const taskTtlMs = config?.timeouts?.taskTtlMs ?? 604800000;
 
-/** 追加一行 JSON 审计（best-effort）。 */
-function appendAudit(file, entry, logger) {
-    try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
-    } catch (err) {
-        logger.error("审计写入失败（%s）：%s", file, err.message);
-    }
-}
+  // 运行期堆状态（构造器不做任何工作；不注册、不起 timer、不写库）。
+  const turnStarts = new Map(); // sessionId -> { turn, seq }
+  const controllers = new Map(); // taskId -> AbortController
+  let started = false;
+  let disposed = false;
+  let tickTimer = null;
+  let wakeTimer = null;
+  let job = null; // 当前 normalize/admit 作业的 promise
+  let remoteJob = null;
+  let remoteController = null;
+  let preferCurate = true;
+  const recallJobs = new Set();
+  let currentTaskId = null;
+  let ownerId = null; // 懒生成：lease owner 标识
+  let sql = null;
+  let lastError = null;
 
-/** 把遗忘工具结果渲染成模型可见文本。 */
-function renderForget(value) {
-    const list = (value.memories ?? []).slice(0, 8).map((t) => `· ${t}`).join("\n");
-    switch (value.outcome) {
-        case "no-match":
-            return `没有找到与「${value.target}」相关的长期记忆，无需遗忘。`;
-        case "plan": {
-            const ids = value.ids ?? [];
-            const lines = (value.memories ?? [])
-                .slice(0, 20)
-                .map((t, i) => `· [${ids[i] ?? "?"}] ${t}`)
-                .join("\n");
-            return `关于「${value.target}」有 ${value.planned} 条候选。请把清单给用户看、让 ta 选择要抑制哪些，再用 ids 调用本工具执行：\n${lines}`;
-        }
-        case "unavailable":
-            return `找到了 ${value.planned} 条关于「${value.target}」的记忆，但**没有可用的确认通道**，未执行（可稍后再试）。`;
-        case "rejected":
-            return `用户**拒绝**了这次遗忘，未执行；${value.planned} 条记忆保持原样。`;
-        case "cancelled":
-            return `遗忘请求被取消，未执行。`;
-        case "allowed-once":
-            return `遗忘已执行：抑制了 ${value.executed}/${value.planned} 条关于「${value.target}」的记忆（可撤销，用户反悔时可恢复）。\n${list}`;
-        default:
-            return `遗忘处理完毕（outcome=${value.outcome}）。`;
-    }
-}
-
-/** 把恢复工具结果渲染成模型可见文本。 */
-function renderRestore(value) {
-    switch (value.outcome) {
-        case "no-record":
-            return `没有关于「${value.target}」的遗忘记录，无需恢复。`;
-        case "unavailable":
-            return `找到了 ${value.planned} 条可恢复记忆，但**没有可用的确认通道**，未恢复。`;
-        case "rejected":
-            return `用户**拒绝**了这次恢复，未执行。`;
-        case "cancelled":
-            return `恢复请求被取消，未执行。`;
-        case "allowed-once":
-            return `已恢复 ${value.restored}/${value.planned} 条关于「${value.target}」的记忆。`;
-        default:
-            return `恢复处理完毕（outcome=${value.outcome}）。`;
-    }
-}
-
-/**
- * 安装记忆桥（若 config.memory.enabled === false 则跳过）。
- * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {object} config
- * @param {{ logger: any, stateFile: string }} deps
- */
-export function installMemory(ctx, config, { logger, stateFile }) {
-    const memory = config?.memory ?? {};
-    if (memory.enabled === false) return;
-
-    const client = new HindsightClient({
-        baseUrl: memory.baseUrl ?? "http://127.0.0.1:8888",
-        bank: memory.bank ?? "lepimemory",
-        maxRetries: memory.maxRetries ?? 3,
-        backoffMs: memory.backoffMs ?? 1000,
-        deadlineMs: memory.deadlineMs ?? 3000,
+  function statements() {
+    return (sql ??= {
+      findTask: db.prepare('SELECT * FROM tasks WHERE id=?'),
+      claim: db.prepare(`SELECT * FROM tasks WHERE kind IN ('${NORMALIZE}','${ADMIT}')
+          AND status='pending' AND next_at<=? AND expires_at>? ORDER BY next_at, rowid LIMIT 1`),
+      markRunning: db.prepare("UPDATE tasks SET status='running', lease_owner=? WHERE id=?"),
+      byRequest: db.prepare(`SELECT id FROM tasks WHERE kind='${NORMALIZE}' AND request_id=? LIMIT 1`),
+      turnTasks: db.prepare(`SELECT id, payload_json FROM tasks WHERE kind='${NORMALIZE}'`),
+      windowIds: db.prepare(`SELECT id, actor FROM evidence WHERE session_id=? AND kind<>'splice'
+          AND actor IN ('user','assistant','action') AND seq>? AND seq<=? ORDER BY seq, block_index`),
+      fence: db.prepare('SELECT max(epoch) AS epoch FROM forget_scopes'),
+      blocked: db.prepare("SELECT 1 FROM history_work WHERE session_id=? AND status!='applied' LIMIT 1"),
+      activeScopes: db.prepare('SELECT id, selector_json FROM forget_scopes WHERE active=1'),
+      liveGrants: db.prepare('SELECT * FROM grants WHERE revoked_at IS NULL AND expires_at>?'),
+      grantById: db.prepare('SELECT * FROM grants WHERE id=?'),
+      insertSnapshot: db.prepare('INSERT INTO snapshots(candidate_id,json,payload_hash,created_at) VALUES (?,?,?,?)'),
+      insertLifecycle: db.prepare(`INSERT INTO lifecycle
+          (candidate_id,status,purpose,superseded_by,confirmed_by,grant_id,policy_epoch,updated_at)
+          VALUES (?,?,?,?,?,?,?,?)`),
+      insertTask: db.prepare(`INSERT INTO tasks
+          (id,kind,candidate_id,request_id,status,draft_json,payload_json,next_at,expires_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`),
+      expire: db.prepare(`SELECT id,kind,payload_json FROM tasks WHERE kind<>'curate' AND submitted_at IS NULL
+          AND status IN ('pending','deferred','running') AND expires_at<=?`),
+      expireOne: db.prepare("UPDATE tasks SET status='expired', lease_owner=NULL, draft_json=NULL, payload_json=? WHERE id=?"),
+      orphanWrites: db.prepare(`SELECT candidate_id FROM lifecycle WHERE status='pending'
+          AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.candidate_id=lifecycle.candidate_id
+          AND t.kind='${WRITE}' AND t.status IN ('pending','running','submitted','deferred'))`),
+      markAuditOnly: db.prepare("UPDATE lifecycle SET status='audit_only', updated_at=? WHERE candidate_id=? AND status='pending'"),
+      counts: db.prepare('SELECT kind, status, count(*) AS n FROM tasks GROUP BY kind, status'),
     });
-    const minSemantic = memory.minSemantic ?? 0.35;
-    const maxItems = memory.maxItems ?? 4;
-    const recallAudit = memory.auditFile ?? auditFileFor(stateFile, "recall.jsonl");
-    const retainAudit = memory.retainAuditFile ?? auditFileFor(stateFile, "retain.jsonl");
-    const forgetAudit = memory.forgetAuditFile ?? auditFileFor(stateFile, "forget.jsonl");
+  }
 
-    const retainEnabled = memory.retain?.enabled !== false;
-    const forgetEnabled = memory.forget?.enabled !== false;
-    const retainMinChars = memory.retain?.minChars ?? 6;
+  async function checkWritePolicy(source, task, { signal, restore = false } = {}) {
+    const epoch = store.policyEpoch;
+    const denied = code => ({ allowed: false, epoch, code });
+    if (disposed || signal?.aborted) return denied('LEPI_WORKER_STOPPED');
+    if (!source) return denied('LEPI_SNAPSHOT_INVALID');
+    source = loadSource(store, source.candidate.candidate_id);
+    if (!source) return denied('LEPI_SNAPSHOT_INVALID');
+    const { candidate, lifecycle } = source;
+    const payload = parseJson(task.payload_json, {});
+    const restoring = restore && task.kind === 'curate' && payload.kind === 'restore'
+      && Array.isArray(payload.candidate_ids) && payload.candidate_ids.includes(candidate.candidate_id);
+    if (restoring ? lifecycle.status !== 'unknown'
+      : !['pending', ...(task.submitted_at != null ? ['unknown'] : [])].includes(lifecycle.status))
+      return denied('LEPI_MEMORY_SUPPRESSED');
+    if (candidate.sensitivity === 'excluded') return denied('LEPI_MEMORY_SUPPRESSED');
+    if (candidate.sensitivity === 'private') {
+      const grant = lifecycle.grant_id && statements().grantById.get(lifecycle.grant_id);
+      if (!grant || grant.revoked_at != null || grant.expires_at <= now()) return denied('LEPI_GRANT_INVALID');
+      const scope = parseJson(grant.scope_json, {});
+      if (!['item', 'topic', 'continuous'].includes(scope.kind)
+        || (candidate.origin === 'inference' && !grant.allow_inference)) return denied('LEPI_GRANT_INVALID');
+      if (scope.kind === 'item' && (scope.candidate_id !== candidate.candidate_id
+        || !arrayEq(parseJson(grant.source_ids_json, []), candidate.source_ids))) return denied('LEPI_GRANT_INVALID');
+      const sessionId = payload.session_id ?? db.prepare('SELECT session_id FROM evidence WHERE id=?').get(candidate.source_ids[0])?.session_id;
+      if (scope.session_id != null && scope.session_id !== sessionId) return denied('LEPI_GRANT_INVALID');
+    }
+    const request = task.request_id && db.prepare('SELECT kind,payload_json FROM requests WHERE id=?').get(task.request_id);
+    const exceptions = new Set(request?.kind === 're_remember'
+      ? parseJson(request.payload_json, {}).exception_scope_ids ?? [] : []);
+    for (const row of db.prepare('SELECT * FROM forget_scopes WHERE active=1').all()) {
+      if (parseJson(row.candidate_ids_json, []).includes(candidate.candidate_id)) return denied('LEPI_MEMORY_SUPPRESSED');
+      if (exceptions.has(row.id) || row.epoch <= lifecycle.policy_epoch) continue;
+      const selector = parseJson(row.selector_json, {});
+      if (!selector.subject_key || !selector.facet_key) return denied('LEPI_MEMORY_SUPPRESSED');
+      // Classify typed scope only: never re-send an old potentially forgotten value to a model.
+      const typed = { subject_key: candidate.subject_key, facet_key: candidate.facet_key,
+        origin: candidate.origin, source_ids: [], text: '' };
+      const match = await processor.matchGrant(typed, { id: row.id, scope: {
+        kind: 'topic', subject_key: selector.subject_key, topic: selector.facet_key,
+        session_id: null, allow_inference: false,
+      } }, { purpose: 'forget', signal, sources: [] });
+      if (disposed || signal?.aborted || store.policyEpoch !== epoch) return denied('LEPI_POLICY_CHANGED');
+      if (match?.match !== 'not_covered') return denied('LEPI_MEMORY_SUPPRESSED');
+    }
+    if (store.policyEpoch !== epoch) return denied('LEPI_POLICY_CHANGED');
+    return { allowed: true, epoch, code: null };
+  }
 
-    const injectedTurns = new Map(); // sessionId -> 已注入的 turn（每轮至多注入一次）
-    const turnUserText = new Map(); // sessionId -> 本轮用户说过的话（写路径缓冲）
-    const recentRetained = new Set(); // 去重
-    const pendingAction = new Map(); // callId -> { name, title }（待配对的行动工具调用）
-    const turnActions = new Map(); // sessionId -> 本轮成功动作 [{ name, title }]
+  const writeWorker = createWriteWorker({ store, hindsight, checkPolicy: checkWritePolicy, now });
+  const curateWorker = createCurateWorker({ store, hindsight, checkPolicy: checkWritePolicy, now });
+  const recaller = createRecaller({ store, hindsight, processor, now });
 
-    // ── 读路径：pre-step 召回 → 归因 → 注入 ─────────────────────────────
-    ctx.on(
-        "agent/pre-step",
-        async ({ agent, turn, signal }, next) => {
-            const decision = await next();
-            if (decision.kind === "reject" || signal.aborted) return decision;
+  function runRecall(input, auxiliary = false) {
+    if (disposed) throw Object.assign(new Error('LEPI_WORKER_STOPPED'), { code: 'LEPI_WORKER_STOPPED' });
+    const controller = new AbortController();
+    const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+    const work = { controller, promise: null };
+    recallJobs.add(work);
+    work.promise = (auxiliary ? recaller.readMemory : recaller.recall)({ ...input, signal });
+    return work.promise.finally(() => recallJobs.delete(work));
+  }
 
-            const query = userTextOf(decision.messages);
-            if (!query) return decision;
-            const sessionId = String(agent.session.id);
-            if (injectedTurns.get(sessionId) === turn) return decision;
+  function leaseOwner() {
+    return (ownerId ??= `${process.pid}-${randomUUID()}`);
+  }
 
-            const started = Date.now();
-            let response;
-            try {
-                // prefer_observations：冲突时只取 Hindsight 合成的「当前有效版本」，不返回被它取代的旧事实。
-                response = await client.recall(query, { trace: true, signal, preferObservations: true });
-            } catch (err) {
-                appendAudit(recallAudit, {
-                    type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
-                    degraded: true, error: String(err?.message ?? err),
-                }, logger);
-                return decision; // 降级：无记忆回答
-            }
+  function latestFence() {
+    const row = statements().fence.get();
+    return row?.epoch ?? 0;
+  }
 
-            const { picked, excluded } = attribute(response?.results, { minSemantic, maxItems });
-            appendAudit(recallAudit, {
-                type: "recall", at: new Date().toISOString(), session: sessionId, turn, query,
-                candidates: (response?.results ?? []).length,
-                picked: picked.map((m) => ({
-                    id: m.id, text: m.text, type: m.type, trust: m.trust,
-                    semantic: Math.round(m.semantic * 1000) / 1000,
-                    decay: Math.round(m.decay * 1000) / 1000,
-                })),
-                excluded: excluded.map((m) => ({ id: m.id, trust: m.trust, reason: m.reason })),
-                // 本轮是否返回了「已更新的综合版本」（原记忆被 observation 取代）
-                superseded: picked.some((m) => m.type === "observation"),
-                ms: Date.now() - started,
-            }, logger);
+  function fenced(sessionId) {
+    if (!sessionId) return false;
+    try { return Boolean(statements().blocked.get(sessionId)); } catch { return true; }
+  }
 
-            if (picked.length === 0) return decision;
-            injectedTurns.set(sessionId, turn);
-            return {
-                ...decision,
-                messages: [...decision.messages, injectMessage(renderRecall(picked), { kind: RECALL_KIND, form: "recall" })],
-            };
-        },
-        { prepend: true },
-    );
+  function liveRoot(agent) {
+    if (disposed || !agent) return false;
+    const get = ctx?.agents?.get;
+    if (typeof get !== 'function' || get.call(ctx.agents, agent.id) !== agent) return false;
+    const roots = ctx?.agents?.roots;
+    if (typeof roots === 'function' && !roots.call(ctx.agents).includes(agent)) return false;
+    return true;
+  }
 
-    // ── 遗忘工具：模型调用 → 计划 → ctx.approval 确认 → 抑制 ───────────────
-    if (forgetEnabled && ctx.tools) {
-        ctx.effect(
-            () =>
-                ctx.tools.register({
-                    name: FORGET_TOOL,
-                    description:
-                        "把某个对象从长期记忆里“忘掉”（检索抑制，可恢复）。**两段式**：先不带 ids 调一次 → 返回候选清单（计划），把它给用户看、让 ta 选择；再把选中的 ids 带上调一次 → 经用户确认后执行抑制。当用户明确要求忘记某人/某事时调用。",
-                    parameters: {
-                        type: "object",
-                        additionalProperties: false,
-                        properties: {
-                            target: { type: "string", description: "要忘掉的对象（人名 / 事物 / 说法）" },
-                            ids: {
-                                type: "array",
-                                items: { type: "string" },
-                                description: "只抑制这些记忆 id（来自上一次调用的候选 ids）；省略则仅返回候选计划",
-                            },
-                        },
-                        required: ["target"],
-                    },
-                    output: {
-                        schema: {
-                            type: "object",
-                            additionalProperties: false,
-                            properties: {
-                                target: { type: "string" },
-                                planned: { type: "number" },
-                                executed: { type: "number" },
-                                outcome: { type: "string" },
-                                ids: { type: "array", items: { type: "string" } },
-                                memories: { type: "array", items: { type: "string" } },
-                            },
-                            required: ["target", "planned", "executed", "outcome", "ids", "memories"],
-                        },
-                        render: (_args, value) => [{ type: "text", text: renderForget(value) }],
-                    },
-                    execute: async (args, exec) => {
-                        const target = String(args?.target ?? "").trim();
-                        if (!target) throw new Error(`${FORGET_TOOL} 需要非空的 target`);
+  function current(scope) {
+    return liveRoot(scope.agent) && !scope.signal?.aborted && !fenced(scope.sessionId)
+      && store.policyEpoch === scope.epoch && latestFence() === scope.fence;
+  }
 
-                        let response;
-                        try {
-                            response = await client.recall(target, { trace: false, signal: exec.signal });
-                        } catch (err) {
-                            throw new Error(`记忆服务不可达，无法生成遗忘计划：${err?.message ?? err}`);
-                        }
-                        const { picked } = attribute(response?.results, { minSemantic: 0.3, maxItems: 20, applyDecay: false });
-                        // 朴素 S1 切分：只取**文本确实提到目标**的候选（避免误伤无关片段）。
-                        const related = picked.filter((m) => String(m.text ?? "").includes(target));
-                        if (related.length === 0) {
-                            return { target, planned: 0, executed: 0, outcome: "no-match", ids: [], memories: [] };
-                        }
+  async function sourcesCurrent(candidate, scope) {
+    if (!current(scope)) return false;
+    try {
+      const read = await evidence.read(candidate.source_ids, { agent: scope.agent, signal: scope.signal, request_id: scope.requestId });
+      return current(scope) && candidate.source_ids.every(id => read.sources.some(source => source.id === id));
+    } catch { return false; }
+  }
 
-                        // 第一段（缺省 ids）：只返回候选计划——不请求审批、不执行。
-                        if (!Array.isArray(args?.ids) || args.ids.length === 0) {
-                            return {
-                                target,
-                                planned: related.length,
-                                executed: 0,
-                                outcome: "plan",
-                                ids: related.map((m) => m.id),
-                                memories: related.map((m) => String(m.text ?? "")),
-                            };
-                        }
+  /** 后台审计：真实 session/turn/step/IDs；背景动作没有 tool/call，call_id 恒为 NULL。 */
+  function audit(type, status, identity = {}, data = {}) {
+    try {
+      store.audit({
+        type, status, at: now(),
+        session_id: identity.session_id ?? null, turn: identity.turn ?? null, step: identity.step ?? null,
+        call_id: null,
+        request_id: identity.request_id ?? null, task_id: identity.task_id ?? null,
+        candidate_id: identity.candidate_id ?? null, operation_id: identity.operation_id ?? null,
+        data,
+      });
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+      throw error;
+    }
+  }
 
-                        // 第二段：只抑制用户选中的 id（避免「全量抑制」与模型陈述不符）。
-                        const wanted = new Set(args.ids.map((s) => String(s)));
-                        const selected = related.filter((m) => wanted.has(String(m.id)));
-                        if (selected.length === 0) {
-                            return { target, planned: 0, executed: 0, outcome: "no-match", ids: [], memories: [] };
-                        }
-                        const memories = selected.map((m) => String(m.text ?? ""));
+  function identityOf(task) {
+    const payload = parseJson(task.payload_json, {});
+    return {
+      session_id: payload.session_id ?? null,
+      request_id: task.request_id ?? payload.request_id ?? null,
+      candidate_id: task.candidate_id ?? null,
+      turn: payload.turn ?? null,
+    };
+  }
 
-                        const approver = ctx.get ? ctx.get("approval") : undefined;
-                        if (!approver) {
-                            return { target, planned: selected.length, executed: 0, outcome: "unavailable", ids: selected.map((m) => m.id), memories };
-                        }
-                        const outcome = await approver.request({
-                            agent: exec.agent,
-                            toolName: FORGET_TOOL,
-                            callId: exec.callId,
-                            reason: `抑制 ${selected.length} 条关于「${target}」的记忆`,
-                            displayReason: {
-                                zh: `将抑制 ${selected.length} 条关于「${target}」的记忆（可恢复）：\n${memories.slice(0, 5).map((t) => `· ${t}`).join("\n")}`,
-                                en: `Suppress ${selected.length} memories about "${target}" (reversible).`,
-                            },
-                            ...(exec.signal ? { signal: exec.signal } : {}),
-                        });
-                        if (outcome !== "allowed-once") {
-                            return { target, planned: selected.length, executed: 0, outcome, ids: selected.map((m) => m.id), memories };
-                        }
+  // ── 任务终态/重试 ──────────────────────────────────────────────────
+  function finish(task, status, code = null, { clearDraft = false } = {}) {
+    const row = statements().findTask.get(task.id);
+    if (!row || !['running', 'pending'].includes(row.status)) return;
+    try {
+      store.transaction(() => {
+        db.prepare('UPDATE tasks SET status=?, error_code=?, lease_owner=NULL, next_at=?, draft_json=? WHERE id=?')
+          .run(status, code, now(), clearDraft ? null : task.draft_json, task.id);
+        audit('task', status, { ...identityOf(task), task_id: task.id }, { kind: task.kind, code });
+      });
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+    }
+  }
 
-                        let done = 0;
-                        for (const m of selected) {
-                            try {
-                                await client.invalidate(m.id, { signal: exec.signal });
-                                done += 1;
-                            } catch {
-                                /* 单条失败不中断 */
-                            }
-                        }
-                        appendAudit(forgetAudit, {
-                            type: "forget", at: new Date().toISOString(), tool: FORGET_TOOL, target,
-                            planned: selected.length, executed: done, outcome, ids: selected.map((m) => m.id),
-                        }, logger);
-                        return { target, planned: selected.length, executed: done, outcome, ids: selected.map((m) => m.id), memories };
-                    },
-                }),
-            "lepimemory.forget()",
-        );
+  /** 有界网络退避：最多三次（1s/2s/4s）置回 pending；到顶转 deferred。绝不复活已终态任务。 */
+  function scheduleRetry(task, code = GENERIC_CODE) {
+    try {
+      const current = statements().findTask.get(task.id);
+      if (!current || !['running', 'pending'].includes(current.status)) return;
+      store.transaction(() => {
+        const retries = (task.attempts ?? 0) + 1;
+        if (retries > BACKOFF.length) {
+          db.prepare("UPDATE tasks SET attempts=?, status='deferred', error_code=?, lease_owner=NULL, next_at=? WHERE id=?")
+            .run(retries, code, now(), task.id);
+          audit('task', 'deferred', { ...identityOf(task), task_id: task.id }, { kind: task.kind, code });
+        } else {
+          db.prepare("UPDATE tasks SET attempts=?, status='pending', error_code=?, lease_owner=NULL, next_at=? WHERE id=?")
+            .run(retries, code, now() + BACKOFF[retries - 1], task.id);
+          audit('task', 'retrying', { ...identityOf(task), task_id: task.id }, { kind: task.kind, code, attempt: retries });
+        }
+      });
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+    }
+  }
 
-        // 与 forget 对称：恢复（撤销抑制）。ids 从 forget.jsonl 读回。
-        ctx.effect(
-            () =>
-                ctx.tools.register({
-                    name: RESTORE_TOOL,
-                    description:
-                        "把之前被「忘掉/抑制」的记忆**恢复**回来（撤销遗忘）。当用户表示反悔、要求恢复某人/某事时调用。",
-                    parameters: {
-                        type: "object",
-                        additionalProperties: false,
-                        properties: { target: { type: "string", description: "要恢复的对象（人名 / 事物 / 说法）" } },
-                        required: ["target"],
-                    },
-                    output: {
-                        schema: {
-                            type: "object",
-                            additionalProperties: false,
-                            properties: {
-                                target: { type: "string" },
-                                planned: { type: "number" },
-                                restored: { type: "number" },
-                                outcome: { type: "string" },
-                            },
-                            required: ["target", "planned", "restored", "outcome"],
-                        },
-                        render: (_args, value) => [{ type: "text", text: renderRestore(value) }],
-                    },
-                    execute: async (args, exec) => {
-                        const target = String(args?.target ?? "").trim();
-                        if (!target) throw new Error(`${RESTORE_TOOL} 需要非空的 target`);
+  function patchPayload(task, patch) {
+    try {
+      const next = { ...parseJson(task.payload_json, {}), ...patch };
+      store.transaction(() => db.prepare('UPDATE tasks SET payload_json=? WHERE id=?').run(JSON.stringify(next), task.id));
+      task.payload_json = JSON.stringify(next);
+      return next;
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+      return parseJson(task.payload_json, {});
+    }
+  }
 
-                        // 从自有审计里读回「该目标被抑制过」的 ids。
-                        let entries = [];
-                        try {
-                            entries = fs.readFileSync(forgetAudit, "utf8").split("\n").filter(Boolean)
-                                .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-                        } catch {
-                            /* 无审计文件 */
-                        }
-                        const ids = new Set();
-                        for (const e of entries) {
-                            if (e.type !== "forget") continue;
-                            if (!e.target || !String(e.target).includes(target)) continue;
-                            if (!(e.outcome === "allowed-once" || e.executed > 0)) continue;
-                            for (const id of e.ids ?? []) ids.add(id);
-                        }
-                        const list = [...ids];
-                        if (list.length === 0) return { target, planned: 0, restored: 0, outcome: "no-record" };
+  // ── enqueue / afterTurn（只入 refs；去重按真实 request/turn 元数据）─────
+  function enqueue(input) {
+    if (disposed) throw new Error(GENERIC_CODE);
+    const requestId = typeof input?.request_id === 'string' && input.request_id ? input.request_id : null;
+    const sessionId = typeof input?.session_id === 'string' ? input.session_id : null;
+    const sourceIds = Array.isArray(input?.source_ids) ? [...new Set(input.source_ids.filter((id) => typeof id === 'string' && id))] : [];
+    if (!sessionId || sourceIds.length === 0) throw new Error(GENERIC_CODE);
 
-                        const approver = ctx.get ? ctx.get("approval") : undefined;
-                        if (!approver) return { target, planned: list.length, restored: 0, outcome: "unavailable" };
-                        const outcome = await approver.request({
-                            agent: exec.agent,
-                            toolName: RESTORE_TOOL,
-                            callId: exec.callId,
-                            reason: `恢复 ${list.length} 条关于「${target}」的记忆`,
-                            displayReason: {
-                                zh: `恢复 ${list.length} 条关于「${target}」的被抑制记忆`,
-                                en: `Restore ${list.length} suppressed memories about "${target}".`,
-                            },
-                            ...(exec.signal ? { signal: exec.signal } : {}),
-                        });
-                        if (outcome !== "allowed-once") return { target, planned: list.length, restored: 0, outcome };
-
-                        let done = 0;
-                        for (const id of list) {
-                            try {
-                                await client.revert(id, { signal: exec.signal });
-                                done += 1;
-                            } catch {
-                                /* 单条失败不中断 */
-                            }
-                        }
-                        appendAudit(forgetAudit, {
-                            type: "restore", at: new Date().toISOString(), tool: RESTORE_TOOL, target,
-                            planned: list.length, restored: done, outcome, ids: list,
-                        }, logger);
-                        return { target, planned: list.length, restored: done, outcome };
-                    },
-                }),
-            "lepimemory.restore()",
-        );
+    if (requestId) {
+      const existing = statements().byRequest.get(requestId);
+      if (existing) return { task_id: existing.id };
     }
 
-    // ── 推断工具：角色主动记下「自己察觉到的判断」（信任档 inference，会随时间衰减）──
-    if (retainEnabled && ctx.tools) {
-        ctx.effect(
-            () =>
-                ctx.tools.register({
-                    name: REMEMBER_TOOL,
-                    description:
-                        "把你自己**推断 / 察觉到**的关于对方的印象记进长期记忆——不是你被告知的事实（那些会自动记住），而是你自己拼出来的判断（比如 ta 好像喜欢安静的地方）。当你想留住这样一个印象时调用。content 请以「蝶忆觉得… / 蝶忆注意到…」这样的句子、用名字指代你自己来写。",
-                    parameters: {
-                        type: "object",
-                        additionalProperties: false,
-                        properties: {
-                            content: { type: "string", description: "你要记下的推断（一句话，第一人称）" },
-                            about: { type: "string", description: "关于谁 / 什么（可选）" },
-                        },
-                        required: ["content"],
-                    },
-                    output: {
-                        schema: {
-                            type: "object",
-                            additionalProperties: false,
-                            properties: { content: { type: "string" }, outcome: { type: "string" } },
-                            required: ["content", "outcome"],
-                        },
-                        render: (_args, value) => [
-                            {
-                                type: "text",
-                                text:
-                                    value.outcome === "stored"
-                                        ? `记下了（我的推断）：${value.content}`
-                                        : `没能记下（${value.outcome}）。`,
-                            },
-                        ],
-                    },
-                    execute: async (args, exec) => {
-                        const content = String(args?.content ?? "").trim();
-                        if (!content) throw new Error(`${REMEMBER_TOOL} 需要非空的 content`);
-                        const about = String(args?.about ?? "").trim();
-                        const context = about ? `我的推断（关于${about}）` : "我的推断";
-                        // 用角色名成句：Hindsight 的抽取把「无主语的第一人称」当作**用户**在说话
-                        // （「我猜她…」→「用户猜测她…」）。带上角色名，抽取才忠实（实测：见 memory-*.md）。
-                        const persona = memory.personaName ?? "蝶忆";
-                        const phrased = content.includes(persona) ? content : `${persona}的推断：${content}`;
-                        try {
-                            const res = await client.retain(
-                                [{ content: phrased, context, tags: ["origin:character-inference"], metadata: { trust: TRUST.INFERENCE, origin: "character-inference" } }],
-                                { deadlineMs: 30000, maxRetries: 0, ...(exec.signal ? { signal: exec.signal } : {}) },
-                            );
-                            appendAudit(retainAudit, {
-                                type: "retain", origin: "character-inference", at: new Date().toISOString(),
-                                ok: true, items: res?.items_count, content: phrased,
-                            }, logger);
-                            return { content, outcome: "stored" };
-                        } catch (err) {
-                            appendAudit(retainAudit, {
-                                type: "retain", origin: "character-inference", at: new Date().toISOString(),
-                                degraded: true, error: String(err?.message ?? err), content: phrased,
-                            }, logger);
-                            return { content, outcome: "unavailable" };
-                        }
-                    },
-                }),
-            "lepimemory.remember()",
+    const id = randomUUID();
+    const payload = {
+      session_id: sessionId,
+      source_ids: sourceIds,
+      kind: input.kind ?? null,
+      explicit: input.explicit === true,
+      request_id: requestId,
+      turn: Number.isSafeInteger(input.turn) ? input.turn : null,
+    };
+    store.transaction(() => {
+      statements().insertTask.run(id, NORMALIZE, null, requestId, 'pending', null, JSON.stringify(payload), now(), now() + taskTtlMs);
+      audit('task', 'pending', { session_id: sessionId, request_id: requestId, task_id: id }, { kind: NORMALIZE, source_count: sourceIds.length, explicit: payload.explicit });
+    });
+    wake();
+    return { task_id: id };
+  }
+
+  function evidenceForTurn(sessionId, fromSeq, toSeq) {
+    try {
+      return statements().windowIds.all(sessionId, fromSeq, toSeq);
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+      return [];
+    }
+  }
+
+  function turnAlreadyQueued(sessionId, turn) {
+    for (const row of statements().turnTasks.all()) {
+      const payload = parseJson(row.payload_json, {});
+      if (payload.session_id === sessionId && payload.turn === turn) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 只观测当前 turn/end 已交付的公共证据（真实 Session/evidence IDs），不做工具非 error 成功；
+   * 未在当前 live 进程见证 turn/start 的结束（含冷 resume 的 interrupted closer）不重建。
+   */
+  function afterTurn(session, event) {
+    if (disposed || !event?.type) return;
+    const sessionId = String(session?.id ?? '');
+    if (!sessionId) return;
+    if (event.type === 'turn/start') {
+      turnStarts.set(sessionId, { turn: event.data?.turn, seq: Number(event.seq) });
+      return;
+    }
+    if (event.type !== 'turn/end') return;
+    const start = turnStarts.get(sessionId);
+    turnStarts.delete(sessionId);
+    const reason = event.data?.reason?.kind;
+    if (!DELIVERED_REASONS.has(reason)) return;
+    if (!start) return; // 冷 resume：无本进程见证，不偷读/不重建
+    const turn = event.data?.turn;
+    const rows = evidenceForTurn(sessionId, start.seq, Number(event.seq));
+    if (reason !== 'completed' && !rows.some(row => row.actor === 'assistant' || row.actor === 'action')) return;
+    const sourceIds = rows.map(row => row.id);
+    if (sourceIds.length === 0) return;
+    if (turnAlreadyQueued(sessionId, turn)) return;
+    const id = randomUUID();
+    const payload = { session_id: sessionId, source_ids: sourceIds, kind: null, explicit: false, request_id: null, turn: turn ?? null };
+    store.transaction(() => {
+      statements().insertTask.run(id, NORMALIZE, null, null, 'pending', null, JSON.stringify(payload), now(), now() + taskTtlMs);
+      audit('task', 'pending', { session_id: sessionId, turn: turn ?? null, task_id: id }, { kind: NORMALIZE, source_count: sourceIds.length, reason });
+    });
+    wake();
+  }
+
+  // ── 授权与落库 ─────────────────────────────────────────────────────
+  function exceptionScopeIds(requestId) {
+    if (!requestId) return [];
+    try {
+      const row = db.prepare('SELECT payload_json FROM requests WHERE id=?').get(requestId);
+      const payload = parseJson(row?.payload_json, {});
+      return Array.isArray(payload.exception_scope_ids) ? payload.exception_scope_ids : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** active forget scopes：仅用 typed selector 比对，绝不把旧正文喂给 checker。 */
+  async function suppressionMatch(candidate, scope) {
+    const { agent, signal, requestId, requestKind } = scope;
+    let scopes;
+    try { scopes = statements().activeScopes.all(); } catch { return true; } // 读取失败：保守抑制
+    if (!scopes.length) return false;
+    const exceptions = new Set(requestKind === 're_remember' ? exceptionScopeIds(requestId) : []);
+    for (const row of scopes) {
+      if (exceptions.has(row.id)) continue;
+      const selector = parseJson(row.selector_json, {});
+      if (!selector.subject_key || !selector.facet_key) return true; // 无法核验：保守抑制
+      const grant = { scope: { kind: 'topic', subject_key: selector.subject_key, topic: selector.facet_key, session_id: null, allow_inference: false }, id: row.id };
+      let match;
+      try { match = await processor.matchGrant(candidate, grant, { purpose: 'forget', agent, signal }); }
+      catch { return true; }
+      if (!current(scope)) return true;
+      if (match?.match === 'covered' || match?.match === 'uncertain') return true;
+    }
+    return false;
+  }
+
+  /** 既有授权覆盖：item 精确绑定候选/source；topic/continuous 语义覆盖 + allow_inference。 */
+  async function matchActiveGrant(candidate, scope) {
+    const { agent, signal, sessionId } = scope;
+    let grants;
+    try { grants = statements().liveGrants.all(now()); } catch { return null; }
+    for (const row of grants) {
+      const grantScope = parseJson(row.scope_json, {});
+      if (!grantScope || (grantScope.kind !== 'item' && grantScope.kind !== 'topic' && grantScope.kind !== 'continuous')) continue;
+      if (candidate.origin === 'inference' && !Number(grantScope.allow_inference)) continue;
+      if (grantScope.kind === 'item') {
+        if (grantScope.candidate_id !== candidate.candidate_id) continue;
+        if (row.session_id !== sessionId) continue;
+        if (!arrayEq(parseJson(row.source_ids_json, []), candidate.source_ids)) continue;
+      } else if (grantScope.kind === 'topic') {
+        if (grantScope.session_id != null && grantScope.session_id !== sessionId) continue;
+      } else if (grantScope.kind === 'continuous') {
+        if (grantScope.session_id != null) continue;
+      }
+      let match;
+      try { match = await processor.matchGrant(candidate, { scope: grantScope, id: row.id }, { agent, signal }); }
+      catch { return null; }
+      if (!current(scope)) return null;
+      if (match?.match === 'covered') return row.id;
+    }
+    return null;
+  }
+
+  /** 核验自身 per-item 授权：候选/source 精确、live、未撤销/未过期、恰 +1 epoch、fence 未变。 */
+  function validateOwnGrant(grantId, candidate, { agent, sessionId, epochBefore, fenceBefore }) {
+    let row;
+    try { row = statements().grantById.get(grantId); } catch { return false; }
+    if (!row) return false;
+    if (row.revoked_at != null || Number(row.expires_at) <= now()) return false;
+    if (row.session_id !== sessionId) return false;
+    const scope = parseJson(row.scope_json, {});
+    if (scope.kind !== 'item' || scope.candidate_id !== candidate.candidate_id) return false;
+    if (!arrayEq(parseJson(row.source_ids_json, []), candidate.source_ids)) return false;
+    if (Number(scope.allow_inference) !== (candidate.origin === 'inference' ? 1 : 0)) return false;
+    if (!liveRoot(agent)) return false;
+    if (store.policyEpoch !== epochBefore + 1) return false;
+    if (latestFence() !== fenceBefore) return false;
+    return true;
+  }
+
+  /** INSERT 快照 + lifecycle pending + pending write 任务，同一事务；正文只在获准后落库。 */
+  function commitApproved(candidate, scope, grantId, reasonCode, expectedEpoch, expectedFence) {
+    const snapshotJson = JSON.stringify(candidate);
+    const payloadHash = hashText(snapshotJson);
+    const writeId = randomUUID();
+    try {
+      store.transaction(() => {
+        if (store.policyEpoch !== expectedEpoch) { const error = new Error(RESUBMIT_CODE); error.code = RESUBMIT_CODE; throw error; }
+        if (latestFence() !== expectedFence) { const error = new Error(RESUBMIT_CODE); error.code = RESUBMIT_CODE; throw error; }
+        statements().insertSnapshot.run(candidate.candidate_id, snapshotJson, payloadHash, now());
+        statements().insertLifecycle.run(
+          candidate.candidate_id, 'pending', 'current', null,
+          grantId ?? (scope.explicit ? 'explicit_request' : 'auto'), grantId, store.policyEpoch, now(),
         );
+        statements().insertTask.run(
+          writeId, WRITE, candidate.candidate_id, scope.requestId ?? null, 'pending', null,
+          JSON.stringify({ session_id: scope.sessionId, request_id: scope.requestId ?? null }),
+          now(), now() + taskTtlMs,
+        );
+        audit('retain', 'pending', {
+          session_id: scope.sessionId, turn: scope.turn, request_id: scope.requestId,
+          candidate_id: candidate.candidate_id, task_id: writeId,
+        }, { content_kind: candidate.content_kind, origin: candidate.origin, sensitivity: candidate.sensitivity, reason_code: reasonCode, grant_id: grantId });
+      });
+      return true;
+    } catch (error) {
+      if (error?.code === RESUBMIT_CODE) return false;
+      lastError = error?.code ?? GENERIC_CODE;
+      throw error;
+    }
+  }
+
+  async function authorizeAndCommit(candidate, scope, reasonCode) {
+    const { agent, signal, sessionId } = scope;
+    if (!current(scope)) return 'cancelled';
+    const epochNow = scope.epoch;
+    const fenceNow = scope.fence;
+
+    const suppressed = await suppressionMatch(candidate, scope);
+    if (!current(scope)) return 'cancelled';
+    if (suppressed) {
+      audit('forget', 'suppressed', { session_id: sessionId, turn: scope.turn, request_id: scope.requestId, candidate_id: candidate.candidate_id }, { reason_code: 'forget_scope' });
+      return scope.explicit ? 'suppressed' : 'rejected';
+    }
+    if (store.policyEpoch !== epochNow || latestFence() !== fenceNow) return 'cancelled';
+    if (!await sourcesCurrent(candidate, scope)) return 'cancelled';
+
+    let grantId = null;
+    let expectedEpoch = epochNow;
+    let expectedFence = fenceNow;
+    if (candidate.sensitivity === 'private') {
+      const matched = await matchActiveGrant(candidate, scope);
+      if (!current(scope)) return 'cancelled';
+      if (matched) {
+        grantId = matched;
+      } else {
+        const epochBefore = store.policyEpoch;
+        const fenceBefore = latestFence();
+        let consent;
+        try { consent = await askPrivate(candidate, agent, { signal }); }
+        catch { consent = { outcome: 'unavailable', grant_id: null }; }
+        if (!liveRoot(agent) || signal?.aborted) { audit('consent', 'cancelled', { session_id: sessionId, request_id: scope.requestId, candidate_id: candidate.candidate_id }); return 'cancelled'; }
+        if (consent?.outcome !== 'allowed' || !consent.grant_id) {
+          audit('consent', consent?.outcome ?? 'unavailable', { session_id: sessionId, request_id: scope.requestId, candidate_id: candidate.candidate_id });
+          return consent?.outcome === 'rejected' ? 'rejected' : 'cancelled';
+        }
+        if (!validateOwnGrant(consent.grant_id, candidate, { agent, sessionId, epochBefore, fenceBefore })) {
+          audit('consent', 'cancelled', { session_id: sessionId, request_id: scope.requestId, candidate_id: candidate.candidate_id }, { reason_code: 'grant_invalid' });
+          return 'cancelled';
+        }
+        grantId = consent.grant_id;
+        expectedEpoch = epochBefore + 1;
+        expectedFence = fenceBefore;
+        scope.epoch = expectedEpoch;
+      }
     }
 
-    // ── 写路径：本轮用户说的话 → 写入判断 → retain ────────────────────────
-    if (retainEnabled) {
-        ctx.on("session/event", (session, event) => {
-            const id = String(session.id);
+    if (!await sourcesCurrent(candidate, scope)) return 'cancelled';
+    try {
+      const committed = commitApproved(candidate, scope, grantId, reasonCode, expectedEpoch, expectedFence);
+      return committed ? 'approved' : 'cancelled';
+    } catch {
+      return 'failed';
+    }
+  }
 
-            // 行动工具调用：记下待配对的 callId（含标题）。
-            if (event.type === "tool/call") {
-                if (ACTION_TOOLS.has(event.data?.name)) {
-                    pendingAction.set(event.data.callId, { name: event.data.name, title: parseTitle(event.data.arguments) });
-                }
-                return;
-            }
-            // 行动工具结果：成功则记入本轮的「角色动作」。
-            if (event.type === "tool/result") {
-                const info = toolResultInfo(event.data?.message);
-                const pending = info.toolCallId ? pendingAction.get(info.toolCallId) : undefined;
-                if (pending) {
-                    pendingAction.delete(info.toolCallId);
-                    if (info.isError !== true) {
-                        turnActions.set(id, [...(turnActions.get(id) ?? []), pending]);
-                    }
-                }
-                return;
-            }
+  // ── 候选处理 ───────────────────────────────────────────────────────
+  function createAdmitTask(candidate, scope, status) {
+    const id = randomUUID();
+    const payload = { session_id: scope.sessionId, request_id: scope.requestId ?? null, kind: scope.requestKind ?? null, reason_code: null };
+    store.transaction(() => {
+      statements().insertTask.run(id, ADMIT, candidate.candidate_id ?? null, scope.requestId ?? null, status, JSON.stringify(candidate), JSON.stringify(payload), now(), now() + taskTtlMs);
+      audit('retain', status, { session_id: scope.sessionId, turn: scope.turn, request_id: scope.requestId, candidate_id: candidate.candidate_id, task_id: id }, { content_kind: candidate.content_kind, origin: candidate.origin });
+    });
+    if (status === 'pending') wake();
+  }
 
-            if (event.type === "user/message") {
-                if (event.data?.source?.kind !== "user") return;
-                const text = (event.data.content ?? [])
-                    .filter((b) => b?.type === "text")
-                    .map((b) => b.text)
-                    .join("\n")
-                    .trim();
-                if (text) turnUserText.set(id, [...(turnUserText.get(id) ?? []), text]);
-                return;
-            }
-            if (event.type !== "turn/end") return;
+  async function evaluateAdmissionBounded(candidate, scope) {
+    const { agent, signal } = scope;
+    for (let attempt = 0; ; attempt += 1) {
+      if (!current(scope)) return null;
+      let result;
+      let transient = false;
+      try { result = await admission.evaluate(candidate, { signal, agent }); }
+      catch (error) {
+        if (error?.name === 'AdmissionError') return { verdict: 'reject', reason_code: 'value_reject' };
+        transient = true;
+      }
+      if (!current(scope)) return null;
+      if (!transient) {
+        if (result?.verdict === 'defer' && result.reason_code === 'backend_unavailable') transient = true;
+        else return result;
+      }
+      if (attempt >= BACKOFF.length) return null;
+      await delay(BACKOFF[attempt], undefined, { signal }).catch(() => {});
+    }
+  }
 
-            // (a) 用户陈述 → retain（沿用既有的写入判断 / 去重）。
-            const texts = turnUserText.get(id);
-            turnUserText.delete(id);
-            if (texts && texts.length > 0) {
-                const content = texts.join("\n").trim();
-                const skipReason = writeSkipReason(content, retainMinChars);
-                if (skipReason) {
-                    appendAudit(retainAudit, {
-                        type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                        skipped: true, reason: skipReason, chars: content.length, content,
-                    }, logger);
-                } else {
-                    const key = content.replace(/\s+/g, "");
-                    if (recentRetained.has(key)) {
-                        appendAudit(retainAudit, {
-                            type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                            skipped: true, reason: "重复内容（去重）", content,
-                        }, logger);
-                    } else {
-                        recentRetained.add(key);
-                        if (recentRetained.size > 200) recentRetained.delete(recentRetained.values().next().value);
-                        const retainDeadlineMs = memory.retain?.deadlineMs ?? 30000;
-                        client
-                            .retain([{ content, context: "用户说的话", tags: ["origin:user-turn"], metadata: { trust: TRUST.FACT, origin: "user-turn" } }], { deadlineMs: retainDeadlineMs, maxRetries: 0 })
-                            .then((res) => appendAudit(retainAudit, {
-                                type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                                ok: true, chars: content.length, items: res?.items_count, content,
-                            }, logger))
-                            .catch((err) => appendAudit(retainAudit, {
-                                type: "retain", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                                degraded: true, error: String(err?.message ?? err), content,
-                            }, logger));
-                    }
-                }
-            }
+  async function processCandidate(candidate, scope) {
+    const identity = { session_id: scope.sessionId, turn: scope.turn, request_id: scope.requestId, candidate_id: candidate.candidate_id };
+    if (!current(scope)) return 'cancelled';
+    if (candidate.sensitivity === 'excluded') {
+      audit('retain', 'rejected', identity, { reason_code: 'excluded_source' });
+      return 'rejected';
+    }
+    if (candidate.sensitivity === 'private') {
+      // private 价值判断先在内存堆做；正文绝不进 queue/draft。
+      let verdict = 'accept';
+      let reasonCode = 'explicit_request';
+      if (!scope.explicit) {
+        const result = await evaluateAdmissionBounded(candidate, scope);
+        if (!current(scope)) return 'cancelled';
+        if (!result) { audit('retain', 'deferred', identity, { reason_code: 'backend_unavailable' }); return 'deferred'; }
+        verdict = result.verdict;
+        reasonCode = result.reason_code;
+        audit('retain', 'admission', identity, { verdict, reason_code: reasonCode, score: result.score ?? null,
+          backend: result.backend ?? null, model: result.model ?? null, revision: result.revision ?? null, truncated: result.truncated === true });
+      }
+      if (verdict === 'reject') return 'rejected';
+      if (verdict === 'defer') { audit('retain', 'deferred', identity, { reason_code: reasonCode }); return 'deferred'; }
+      return authorizeAndCommit(candidate, scope, reasonCode);
+    }
+    // ordinary：明确请求直接处理；其余进 durable admit 任务由准入槽评估（允许持久 draft）。
+    if (scope.explicit) return authorizeAndCommit(candidate, scope, 'explicit_request');
+    createAdmitTask(candidate, scope, 'pending');
+    return 'deferred';
+  }
 
-            // (b) 角色行动成功 → retain 成「经历」（fire-and-forget；与用户陈述互不干扰）。
-            const actions = turnActions.get(id);
-            turnActions.delete(id);
-            for (const action of actions ?? []) {
-                const content = `我写了张便条：${action.title}`;
-                client
-                    .retain([{ content, context: "角色做过的事", tags: ["origin:character-action"], metadata: { trust: TRUST.EXPERIENCE, origin: "character-action" } }], { deadlineMs: 30000, maxRetries: 0 })
-                    .then((res) => appendAudit(retainAudit, {
-                        type: "retain", origin: "character-action", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                        ok: true, items: res?.items_count, content,
-                    }, logger))
-                    .catch((err) => appendAudit(retainAudit, {
-                        type: "retain", origin: "character-action", at: new Date().toISOString(), session: id, turn: event.data?.turn,
-                        degraded: true, error: String(err?.message ?? err), content,
-                    }, logger));
-            }
+  // ── normalize 作业 ─────────────────────────────────────────────────
+  async function runNormalize(task, signal) {
+    const payload = parseJson(task.payload_json, {});
+    const sessionId = payload.session_id;
+    const explicit = payload.explicit === true;
+    const sourceIds = Array.isArray(payload.source_ids) ? payload.source_ids : [];
+    if (!sessionId || sourceIds.length === 0) { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+    const epoch0 = store.policyEpoch;
+    const fence0 = latestFence();
+    const agent = ctx?.agents?.get?.(sessionId);
+    if (!agent || !liveRoot(agent)) { finish(task, 'unknown', null, { clearDraft: true }); return; }
+    if (fenced(sessionId)) { finish(task, explicit ? 'unknown' : 'cancelled', explicit ? RESUBMIT_CODE : null, { clearDraft: true }); return; }
+
+    // 先只读一次以区分「政策/来源不可用」与普通失败分类。
+    let read;
+    try { read = await evidence.read(sourceIds, { agent, signal, request_id: payload.request_id }); }
+    catch { scheduleRetry(task); return; }
+    if (store.policyEpoch !== epoch0 || latestFence() !== fence0 || !liveRoot(agent)) {
+      finish(task, 'unknown', RESUBMIT_CODE, { clearDraft: true }); return;
+    }
+    if (signal?.aborted) { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+    if (read.excluded.length > 0) {
+      const resubmit = read.excluded.some((item) => item.code === RESUBMIT_CODE);
+      finish(task, 'unknown', resubmit ? RESUBMIT_CODE : GENERIC_CODE, { clearDraft: true });
+      return;
+    }
+
+    let extraction;
+    try {
+      extraction = await processor.extract({ agent, source_ids: sourceIds, explicit, request_id: payload.request_id ?? null }, { signal });
+    } catch (error) {
+      const code = error?.code ?? GENERIC_CODE;
+      if (error?.name === 'ContractError') {
+        if (!payload.schema_retry) {
+          patchPayload(task, { schema_retry: true });
+          try {
+            store.transaction(() => db.prepare("UPDATE tasks SET status='pending', error_code=?, next_at=?, lease_owner=NULL WHERE id=?").run(code, now() + BACKOFF[0], task.id));
+          } catch (writeError) { lastError = writeError?.code ?? GENERIC_CODE; }
+          audit('task', 'retrying', { ...identityOf(task), task_id: task.id }, { kind: NORMALIZE, code, reason: 'schema' });
+        } else {
+          finish(task, 'unknown', code, { clearDraft: true });
+        }
+        return;
+      }
+      // 确定性失败（重发无意义）不重试；其余按有界退避。
+      if (code === RESUBMIT_CODE || code === 'LEPI_EVIDENCE_BUDGET') {
+        finish(task, 'unknown', code, { clearDraft: true });
+        return;
+      }
+      scheduleRetry(task, code);
+      return;
+    }
+    if (signal?.aborted) { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+    if (store.policyEpoch !== epoch0 || latestFence() !== fence0 || !liveRoot(agent)) {
+      finish(task, 'unknown', RESUBMIT_CODE, { clearDraft: true });
+      return;
+    }
+
+    const baseScope = {
+      agent, signal, sessionId, explicit,
+      requestId: payload.request_id ?? null,
+      requestKind: payload.kind ?? null,
+      turn: payload.turn ?? null,
+      epoch: epoch0, fence: fence0,
+    };
+    const outcomes = [];
+    for (const candidate of extraction.candidates ?? []) {
+      if (signal?.aborted) { outcomes.push('cancelled'); break; }
+      if (!liveRoot(agent)) { outcomes.push('cancelled'); break; }
+      if (!current(baseScope)) { outcomes.push('cancelled'); break; }
+      try { outcomes.push(await processCandidate(candidate, baseScope)); }
+      catch (error) { lastError = error?.code ?? GENERIC_CODE; outcomes.push('failed'); }
+    }
+
+    if (outcomes.includes('failed')) finish(task, 'unknown', GENERIC_CODE);
+    else if (explicit && outcomes.includes('suppressed')) finish(task, 'unknown', RESUBMIT_CODE);
+    else finish(task, 'reconciled');
+  }
+
+  // ── admit 作业 ─────────────────────────────────────────────────────
+  async function runAdmit(task, signal) {
+    const draft = parseJson(task.draft_json, null);
+    const payload = parseJson(task.payload_json, {});
+    const sessionId = payload.session_id;
+    const candidate = draft ? { ...draft, candidate_id: task.candidate_id ?? draft.candidate_id, explicit: false, request_id: payload.request_id ?? draft.request_id ?? null } : null;
+    if (!candidate || !sessionId) { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+    const agent = ctx?.agents?.get?.(sessionId);
+    if (!agent || !liveRoot(agent)) { finish(task, 'unknown', null, { clearDraft: false }); return; }
+    if (fenced(sessionId)) { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+
+    const epoch0 = store.policyEpoch;
+    const scope = { agent, signal, sessionId, explicit: false, requestId: payload.request_id ?? null,
+      requestKind: payload.kind ?? null, turn: null, epoch: epoch0, fence: latestFence() };
+    if (!await sourcesCurrent(candidate, scope)) {
+      finish(task, 'unknown', RESUBMIT_CODE, { clearDraft: true }); return;
+    }
+    let result;
+    try { result = await admission.evaluate(candidate, { signal, agent }); }
+    catch (error) {
+      if (error?.name === 'AdmissionError') { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+      if (error?.code === RESUBMIT_CODE || error?.code === 'LEPI_EVIDENCE_BUDGET') { finish(task, 'unknown', error.code, { clearDraft: true }); return; }
+      scheduleRetry(task);
+      return;
+    }
+    if (signal?.aborted) { finish(task, 'cancelled', null, { clearDraft: false }); return; }
+    if (!liveRoot(agent)) { finish(task, 'cancelled', null, { clearDraft: false }); return; }
+    if (store.policyEpoch !== epoch0) { finish(task, 'unknown', RESUBMIT_CODE, { clearDraft: true }); return; }
+
+    const verdict = result?.verdict;
+    const reasonCode = result?.reason_code ?? 'value_uncertain';
+    audit('retain', 'admission', { session_id: sessionId, request_id: payload.request_id ?? null, candidate_id: candidate.candidate_id, task_id: task.id },
+      { verdict, reason_code: reasonCode, score: result?.score ?? null, backend: result?.backend ?? null,
+        model: result?.model ?? null, revision: result?.revision ?? null, truncated: result?.truncated === true });
+
+    if (verdict === 'reject') { finish(task, 'cancelled', null, { clearDraft: true }); return; }
+    if (verdict === 'defer') {
+      if (reasonCode === 'backend_unavailable') scheduleRetry(task);
+      else finish(task, 'deferred', null, { clearDraft: false });
+      return;
+    }
+    const outcome = await authorizeAndCommit(candidate, scope, reasonCode);
+    if (outcome === 'approved') finish(task, 'reconciled', null, { clearDraft: true });
+    else if (outcome === 'deferred') finish(task, 'deferred', null, { clearDraft: false });
+    else if (outcome === 'failed') finish(task, 'unknown', null, { clearDraft: false });
+    else finish(task, 'cancelled', null, { clearDraft: true });
+  }
+
+  // ── supervisor：2s tick、单作业、短事务 claim/lease ──────────────────
+  function claimReady() {
+    try {
+      return store.transaction(() => {
+        const row = statements().claim.get(now(), now());
+        if (!row) return null;
+        statements().markRunning.run(leaseOwner(), row.id);
+        return row;
+      });
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+      return null;
+    }
+  }
+
+  function expireSweep() {
+    try {
+      store.transaction(() => {
+        for (const row of statements().expire.all(now())) {
+          // 未获准/重试中的任务清正文相关 payload；已获准的 pending write 仅清 draft，保留非正文操作信息。
+          statements().expireOne.run(row.kind === WRITE ? row.payload_json ?? null : null, row.id);
+          audit('task', 'expired', { task_id: row.id }, { kind: row.kind });
+        }
+      });
+    } catch (error) { lastError = error?.code ?? GENERIC_CODE; }
+  }
+
+  function reconcileAuditOnly() {
+    try {
+      store.transaction(() => {
+        for (const row of statements().orphanWrites.all()) {
+          statements().markAuditOnly.run(now(), row.candidate_id);
+          audit('retain', 'audit_only', { candidate_id: row.candidate_id }, { reason_code: 'unwritten_terminal' });
+        }
+      });
+    } catch (error) { lastError = error?.code ?? GENERIC_CODE; }
+  }
+
+  async function runJob() {
+    const task = claimReady();
+    if (!task) { expireSweep(); reconcileAuditOnly(); return; }
+    const controller = new AbortController();
+    controllers.set(task.id, controller);
+    currentTaskId = task.id;
+    try {
+      if (task.kind === NORMALIZE) await runNormalize(task, controller.signal);
+      else await runAdmit(task, controller.signal);
+    } catch (error) {
+      lastError = error?.code ?? GENERIC_CODE;
+      // 作业级异常按有界重试；绝不伪造成功。
+      scheduleRetry(task);
+    } finally {
+      if (task.kind === NORMALIZE && task.request_id && statements().findTask.get(task.id)?.status !== 'pending')
+        evidence.releaseRequest(task.request_id);
+      controllers.delete(task.id);
+      currentTaskId = null;
+    }
+    wake(); // 顺序排空：仍有 ready 任务则不等到下一个 2s tick
+  }
+
+  async function tick() {
+    if (!started || disposed) return;
+    if (!job) job = runJob().catch(error => { lastError = error?.code ?? GENERIC_CODE; })
+      .finally(() => { job = null; });
+    if (!remoteJob) {
+      remoteController = new AbortController();
+      remoteJob = (async () => {
+        const signal = remoteController.signal;
+        const first = preferCurate ? curateWorker : writeWorker;
+        const second = preferCurate ? writeWorker : curateWorker;
+        const claimed = await first.runNext(signal) || await second.runNext(signal);
+        if (claimed) { preferCurate = !preferCurate; wake(); }
+      })().catch(error => { lastError = error?.code ?? 'LEPI_HINDSIGHT_UNAVAILABLE'; })
+        .finally(() => { remoteJob = null; remoteController = null; });
+    }
+    await Promise.all([job, remoteJob].filter(Boolean));
+  }
+
+  function wake() {
+    if (disposed || !started) return;
+    if (wakeTimer) return;
+    wakeTimer = setTimeout(() => { wakeTimer = null; tick().catch(() => {}); }, 0);
+    if (typeof wakeTimer.unref === 'function') wakeTimer.unref();
+  }
+
+  function start() {
+    if (started || disposed) return;
+    started = true;
+    tickTimer = setInterval(() => { tick().catch(() => {}); }, TICK_MS);
+    if (typeof tickTimer.unref === 'function') tickTimer.unref();
+    tick().catch(() => {});
+  }
+
+  /** operator retry：只唤醒已存在的身份；终态不换新 operation、不复活政策终止。 */
+  function retry(taskId) {
+    if (disposed || typeof taskId !== 'string' || !taskId) return null;
+    let row;
+    try { row = statements().findTask.get(taskId); } catch { return null; }
+    if (!row) return null;
+    const retryable = RETRYABLE_STATUS.has(row.status);
+    if (retryable) {
+      try {
+        store.transaction(() => {
+          db.prepare('UPDATE tasks SET status=?, attempts=0, next_at=?, lease_owner=NULL, error_code=NULL WHERE id=?')
+            .run(row.submitted_at != null && row.kind === WRITE ? 'submitted' : 'pending', now(), taskId);
+          audit('task', 'retry_requested', { ...identityOf(row), task_id: taskId }, { kind: row.kind });
         });
+        wake();
+      } catch (error) { lastError = error?.code ?? GENERIC_CODE; }
     }
+    const updated = statements().findTask.get(taskId) ?? row;
+    return { task_id: updated.id, kind: updated.kind, status: updated.status, code: updated.error_code ?? null, retryable };
+  }
 
-    logger.info("记忆桥已装载：%s（bank=%s，retain=%s，forgetTool=%s）", client.baseUrl, client.bank, retainEnabled ? "on" : "off", forgetEnabled ? "on" : "off");
+  function health() {
+    const tasks = {};
+    let total = 0;
+    try {
+      for (const row of statements().counts.all()) {
+        tasks[row.kind] ??= {};
+        tasks[row.kind][row.status] = row.n;
+        total += row.n;
+      }
+    } catch (error) { lastError = error?.code ?? GENERIC_CODE; }
+    let admissionHealth = null;
+    try { admissionHealth = typeof admission?.health === 'function' ? admission.health() : null; } catch { admissionHealth = null; }
+    return {
+      started,
+      disposed,
+      running: currentTaskId,
+      tasks,
+      total,
+      writeExecutor: true,
+      remoteRunning: remoteJob !== null,
+      admission: admissionHealth,
+      last_error: lastError,
+    };
+  }
+
+  async function dispose() {
+    if (disposed) return;
+    disposed = true;
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    for (const controller of controllers.values()) controller.abort();
+    for (const work of recallJobs) work.controller.abort();
+    remoteController?.abort();
+    controllers.clear();
+    turnStarts.clear();
+    await Promise.allSettled([job, remoteJob, ...[...recallJobs].map(work => work.promise)].filter(Boolean));
+  }
+
+  return { enqueue, afterTurn, start, wake, retry, health, dispose,
+    recall: input => runRecall(input), readMemory: input => runRecall(input, true) };
 }
