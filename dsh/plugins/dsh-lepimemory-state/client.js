@@ -133,6 +133,32 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 一条带基线刻度的滑杆：范围输入 + 当前值（区间与提交校验一致）。 */
+    function Slider({ label, value, lo, hi, step, baseline, baselineLabel, onChange }) {
+      const number = typeof value === 'number' && Number.isFinite(value)
+      const clamp = (x) => Math.max(0, Math.min(100, x))
+      const basePct = clamp(((baseline - lo) / (hi - lo)) * 100)
+      return React.createElement(
+        'label',
+        { className: 'lep-field lep-field--slider' },
+        React.createElement('span', { className: 'lep-field__label' }, label),
+        React.createElement(
+          'span',
+          { className: 'lep-slider' },
+          React.createElement('input', {
+            type: 'range',
+            min: lo,
+            max: hi,
+            step: step || 0.01,
+            value: number ? value : lo,
+            onChange: (e) => onChange(Number(e.target.value)),
+          }),
+          React.createElement('span', { className: 'lep-meter__base lep-slider__tick', style: { left: basePct + '%' }, title: baselineLabel }),
+        ),
+        React.createElement('span', { className: 'lep-field__value' }, number ? value.toFixed(2) : '—'),
+      )
+    }
+
     /**
      * 真实 store 状态 → 本地化文案 key。缺省显示原始状态串（绝不当作成功）。
      * 覆盖 plan 明确的枚举 + store 里实际会用到的其余枚举。
@@ -229,8 +255,14 @@ window.__ModuleLoader__.load({
       '  background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.08)); border-radius: 6px; }',
       '.lep-form { margin: 2px 0 4px; }',
       '.lep-field { display: inline-flex; align-items: center; gap: 4px; margin: 2px 10px 2px 0; }',
-      '.lep-field input { width: 66px; font: inherit; color: inherit; background: transparent;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); border-radius: 5px; padding: 0 3px; }',
+      '.lep-field--slider { gap: 6px; }',
+      '.lep-field__label { opacity: 0.8; }',
+      '.lep-field__value { opacity: 0.7; min-width: 30px; }',
+      '.lep-slider { position: relative; display: inline-flex; align-items: center; }',
+      '.lep-slider input[type=range] { width: 96px; margin: 0; }',
+      '.lep-slider__tick { top: auto; bottom: -3px; height: 6px; }',
+      '.lep-preview { margin-top: 4px; }',
+      '.lep-preview__title { opacity: 0.75; }',
       '.lep-form__actions { display: flex; align-items: center; gap: 8px; margin-top: 3px; }',
       '.lep-note { opacity: 0.65; }',
       '.lep-err { color: #c62828; margin-top: 3px; white-space: normal; }',
@@ -412,6 +444,7 @@ window.__ModuleLoader__.load({
       const [form, setForm] = React.useState(null)
       const [formError, setFormError] = React.useState('')
       const [saving, setSaving] = React.useState(false)
+      const [preview, setPreview] = React.useState(null)
       const [retrying, setRetrying] = React.useState({})
       const [receipts, setReceipts] = React.useState([])
 
@@ -637,6 +670,37 @@ window.__ModuleLoader__.load({
         setFormError('')
       }, [editorOpen])
 
+      // 语气预览：防抖 250ms + AbortController 调 `?preview=1`（只读 dry-run，绝不落库/写审计）。
+      React.useEffect(() => {
+        if (!editorOpen || !form) { setPreview(null); return }
+        const values = [form.mood.valence, form.mood.arousal, form.relation.trust, form.relation.closeness, form.relation.familiarity]
+        if (!values.every((v) => typeof v === 'number' && Number.isFinite(v))) { setPreview({ failed: true }); return }
+        const body = JSON.stringify({
+          mood: { valence: form.mood.valence, arousal: form.mood.arousal },
+          relation: { trust: form.relation.trust, closeness: form.relation.closeness, familiarity: form.relation.familiarity },
+        })
+        const ctrl = new AbortController()
+        let alive = true
+        const timer = setTimeout(() => {
+          fetchJson('/lepimemory/state?preview=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            signal: ctrl.signal,
+          })
+            .then((r) => {
+              if (!alive) return
+              if (r.ok && r.body && r.body.ok === true && r.body.preview === true) {
+                setPreview({ rendered: r.body.rendered, tone: r.body.tone || 'plain' })
+              } else {
+                setPreview({ failed: true })
+              }
+            })
+            .catch((err) => { if (alive && err.name !== 'AbortError') setPreview({ failed: true }) })
+        }, 250)
+        return () => { alive = false; clearTimeout(timer); ctrl.abort() }
+      }, [form, editorOpen])
+
       function submitState(ev) {
         ev.preventDefault()
         if (!form) return
@@ -675,20 +739,6 @@ window.__ModuleLoader__.load({
             if (refreshLepState) refreshLepState()
           })
           .catch(() => { if (mounted.current && epoch === privateEpoch.current) { setSaving(false); setFormError(t('saveFailed')) } })
-      }
-
-      function field(label, value, onChange) {
-        return React.createElement(
-          'label',
-          { className: 'lep-field', key: label },
-          label,
-          React.createElement('input', {
-            type: 'number',
-            step: '0.01',
-            value: value === '' || value == null ? '' : value,
-            onChange: (e) => onChange(e.target.value === '' ? '' : Number(e.target.value)),
-          }),
-        )
       }
 
       function renderCandidate(id) {
@@ -939,6 +989,22 @@ window.__ModuleLoader__.load({
                 ),
           )
 
+      const previewBlock = React.createElement(
+        'div',
+        { className: 'lep-preview' },
+        React.createElement('div', { className: 'lep-preview__title' }, t('ed_preview')),
+        !editorOpen || !form || preview == null
+          ? React.createElement('div', { className: 'lep-note' }, t('ed_previewing'))
+          : preview.failed
+            ? React.createElement('div', { className: 'lep-err' }, t('ed_preview_failed'))
+            : React.createElement(
+                'div',
+                null,
+                React.createElement('div', { className: 'lep-note' }, t('tone_' + preview.tone)),
+                React.createElement('div', { className: 'lep-raw__body' }, preview.rendered),
+              ),
+      )
+
       const editor = React.createElement(
         'div',
         { className: 'lep-hist' },
@@ -947,11 +1013,12 @@ window.__ModuleLoader__.load({
           ? React.createElement(
               'form',
               { className: 'lep-form', onSubmit: submitState },
-              field(t('valence'), form.mood.valence, (v) => setForm((f) => ({ ...f, mood: { ...f.mood, valence: v } }))),
-              field(t('arousal'), form.mood.arousal, (v) => setForm((f) => ({ ...f, mood: { ...f.mood, arousal: v } }))),
-              field(t('trust'), form.relation.trust, (v) => setForm((f) => ({ ...f, relation: { ...f.relation, trust: v } }))),
-              field(t('closeness'), form.relation.closeness, (v) => setForm((f) => ({ ...f, relation: { ...f.relation, closeness: v } }))),
-              field(t('familiarity'), form.relation.familiarity, (v) => setForm((f) => ({ ...f, relation: { ...f.relation, familiarity: v } }))),
+              React.createElement('div', { className: 'lep-note' }, t('ed_hint')),
+              React.createElement(Slider, { label: t('valence'), value: form.mood.valence, lo: -1, hi: 1, baseline: BASELINE.valence, baselineLabel: t('baseline'), onChange: (v) => setForm((f) => ({ ...f, mood: { ...f.mood, valence: v } })) }),
+              React.createElement(Slider, { label: t('arousal'), value: form.mood.arousal, lo: 0, hi: 1, baseline: BASELINE.arousal, baselineLabel: t('baseline'), onChange: (v) => setForm((f) => ({ ...f, mood: { ...f.mood, arousal: v } })) }),
+              React.createElement(Slider, { label: t('trust'), value: form.relation.trust, lo: 0, hi: 1, baseline: BASELINE.trust, baselineLabel: t('baseline'), onChange: (v) => setForm((f) => ({ ...f, relation: { ...f.relation, trust: v } })) }),
+              React.createElement(Slider, { label: t('closeness'), value: form.relation.closeness, lo: 0, hi: 1, baseline: BASELINE.closeness, baselineLabel: t('baseline'), onChange: (v) => setForm((f) => ({ ...f, relation: { ...f.relation, closeness: v } })) }),
+              React.createElement(Slider, { label: t('familiarity'), value: form.relation.familiarity, lo: 0, hi: 1, baseline: BASELINE.familiarity, baselineLabel: t('baseline'), onChange: (v) => setForm((f) => ({ ...f, relation: { ...f.relation, familiarity: v } })) }),
               React.createElement(
                 'div',
                 { className: 'lep-form__actions' },
@@ -959,6 +1026,7 @@ window.__ModuleLoader__.load({
                 React.createElement('span', { className: 'lep-note' }, t('opCauseFixed')),
               ),
               formError ? React.createElement('div', { className: 'lep-err' }, formError) : null,
+              previewBlock,
             )
           : null,
       )
@@ -1097,6 +1165,11 @@ window.__ModuleLoader__.load({
         save: '保存',
         saving: '保存中…',
         saveFailed: '保存失败',
+        ed_preview: '预览',
+        ed_previewing: '预览中…',
+        ed_preview_failed: '预览不可用',
+        baseline: '基线',
+        ed_hint: '调整演示状态（原因固定记为「操作者调整演示状态」）',
         formRange: '字段 {field} 必须在 {lo}..{hi}',
         reveal: '查看原始获准快照（仅审计，不恢复）',
         revealHide: '隐藏快照',
@@ -1218,6 +1291,11 @@ window.__ModuleLoader__.load({
         save: 'Save',
         saving: 'Saving…',
         saveFailed: 'Save failed',
+        ed_preview: 'Preview',
+        ed_previewing: 'Previewing…',
+        ed_preview_failed: 'Preview unavailable',
+        baseline: 'Baseline',
+        ed_hint: 'Adjust the demo state (cause is recorded as the fixed operator note)',
         formRange: 'Field {field} must be within {lo}..{hi}',
         reveal: 'View original approved snapshot (audit only, no restore)',
         revealHide: 'Hide snapshot',
