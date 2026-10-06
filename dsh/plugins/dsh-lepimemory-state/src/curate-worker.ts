@@ -1,7 +1,11 @@
 /** Selected raw curation: cancellation is not retraction; restoration requires unchanged source proof. */
 
+import type { StatementSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { loadSource, rawMatches, documentMatches, rawVersion } from './raw-source.js';
+import type { SourceSnapshot } from './raw-source.js';
+import type { HindsightClient } from './hindsight.js';
+import type { Store, TaskRowRecord } from './store.js';
 
 const CURATE = 'curate';
 const WRITE = 'write';
@@ -35,40 +39,102 @@ const CODE = Object.freeze({
     STOPPED: 'LEPI_WORKER_STOPPED',
 });
 
-function isId(value) {
+interface WriteTaskRow {
+    id: string;
+    status: string;
+    submitted_at: number | null;
+    operation_id: string | null;
+}
+interface RawLinkRow {
+    raw_id: string;
+    candidate_id: string;
+    document_id: string;
+    version_hash: string;
+    state: string;
+}
+interface CountRow {
+    status: string;
+    n: number;
+}
+interface Statements {
+    claim: StatementSync;
+    markRunning: StatementSync;
+    findTask: StatementSync;
+    writeTasks: StatementSync;
+    rawLinks: StatementSync;
+    insertLink: StatementSync;
+    markLink: StatementSync;
+    setPayload: StatementSync;
+    setLifecycle: StatementSync;
+    counts: StatementSync;
+}
+interface Progress {
+    kind: unknown;
+    candidate_ids: string[];
+    attempted_ids: string[];
+    succeeded_ids: string[];
+    failed_ids: string[];
+    pending_ids: string[];
+    kept_ids: string[];
+    error_code: string | null;
+}
+interface Outcome {
+    state?: string;
+    code?: string;
+}
+interface GateResult {
+    state?: string;
+    code?: string;
+    epoch?: number;
+}
+interface CurateContext {
+    task: TaskRowRecord;
+    kind: string;
+    requestId: string;
+    signal?: AbortSignal;
+}
+interface ResolvedLink {
+    link: RawLinkRow;
+    raw: Record<string, unknown>;
+    state: string;
+    version: string;
+}
+
+function isId(value: unknown): value is string {
     return typeof value === 'string' && value.length > 0;
 }
 
-function uuidOr(value) {
+function uuidOr(value: unknown): string | null {
     return typeof value === 'string' && UUID.test(value) ? value : null;
 }
 
-function parseJson(text, fallback) {
+function parseJson<T>(text: unknown, fallback: T): T {
     if (typeof text !== 'string') return fallback;
     try {
-        const value = JSON.parse(text);
-        return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+        const value: unknown = JSON.parse(text);
+        return value && typeof value === 'object' && !Array.isArray(value) ? value as T : fallback;
     } catch {
         return fallback;
     }
 }
 
 /**
- * @param {object} deps
- * @param {object} deps.store `openStore` 产物（同步事务；本模块是自身唯一 writer）。
- * @param {object} deps.hindsight `HindsightClient`（`document`/`units`/`cancel`/`operation`/`invalidate`/`revert`）。
- * @param {(source:object, task:object, opts:{signal?:AbortSignal, restore?:boolean}) => Promise<{allowed:boolean, epoch:number, code:string|null}>} deps.checkPolicy
- *   父级实现：审阅当前 lifecycle/grant/typed suppression；`restore:true` 仅放行被选中的 restore 任务。
- * @param {() => number} [deps.now]
- * @returns {{ runNext(signal?:AbortSignal):Promise<boolean>, health():object }}
+ * @param deps.store `openStore` 产物（同步事务；本模块是自身唯一 writer）。
+ * @param deps.hindsight `HindsightClient`（`document`/`units`/`cancel`/`operation`/`invalidate`/`revert`）。
+ * @param deps.checkPolicy 父级实现：审阅当前 lifecycle/grant/typed suppression；`restore:true` 仅放行被选中的 restore 任务。
  */
-export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.now }) {
-    let sql = null;
-    let ownerId = null;
-    let lastError = null;
+export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.now }: {
+    store: Store;
+    hindsight: HindsightClient;
+    checkPolicy(source: SourceSnapshot, task: TaskRowRecord, options: { signal?: AbortSignal; restore?: boolean }): Promise<{ allowed: boolean; epoch: number; code: string | null }>;
+    now?: () => number;
+}) {
+    let sql: Statements | null = null;
+    let ownerId: string | null = null;
+    let lastError: string | null = null;
 
     // SQL 一律懒编译：构造器保持纯（不 touch store）。
-    function statements() {
+    function statements(): Statements {
         if (sql) return sql;
         const db = store.db;
         sql = {
@@ -89,11 +155,11 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         return sql;
     }
 
-    function leaseOwner() {
+    function leaseOwner(): string {
         return (ownerId ??= `${process.pid}-${randomUUID()}`);
     }
 
-    function audit(type, status, identity = {}, data = {}) {
+    function audit(type: string, status: string, identity: { request_id?: string | null; task_id?: string | null; candidate_id?: string | null; operation_id?: string | null } = {}, data: Record<string, unknown> = {}): void {
         try {
             store.audit({
                 type, status, at: now(),
@@ -103,48 +169,52 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
                 data,
             });
         } catch (error) {
-            lastError = error?.code ?? CODE.UNAVAILABLE;
+            lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE;
             throw error;
         }
     }
 
     /** 远端/取消失败分类：只有明确 409 冲突才是永久失败；网络/503/超时/abort 都保持 pending。 */
-    function mapError(error, signal) {
-        if (signal?.aborted || error?.name === 'AbortError' || error?.code === CODE.STOPPED)
+    function mapError(error: unknown, signal?: AbortSignal): Outcome {
+        const code = errorCodeOf(error);
+        const status = errorStatusOf(error);
+        if (signal?.aborted || errorNameOf(error) === 'AbortError' || code === CODE.STOPPED)
             return { state: 'pending', code: CODE.STOPPED };
-        if (error?.code === CODE.POLICY_CHANGED) return { state: 'pending', code: CODE.POLICY_CHANGED };
-        if (error?.code === CODE.CONFLICT || error?.status === 409) return { state: 'failed', code: CODE.CONFLICT };
+        if (code === CODE.POLICY_CHANGED) return { state: 'pending', code: CODE.POLICY_CHANGED };
+        if (code === CODE.CONFLICT || status === 409) return { state: 'failed', code: CODE.CONFLICT };
         return { state: 'pending', code: CODE.UNAVAILABLE };
     }
 
-    function restoreStatus(candidate, nowMs) {
+    function restoreStatus(candidate: SourceSnapshot['candidate'], nowMs: number): string {
         const until = candidate?.valid_until ? Date.parse(candidate.valid_until) : NaN;
         return Number.isFinite(until) && until <= nowMs ? 'history_only' : 'active';
     }
 
     // ── claim（短事务 + lease）────────────────────────────────────────────
-    function claim() {
+    function claim(): TaskRowRecord | null {
         return store.transaction(() => {
-            const row = statements().claim.get(now());
+            const row = statements().claim.get(now()) as unknown as TaskRowRecord | undefined;
             if (!row) return null;
             statements().markRunning.run(leaseOwner(), row.id);
             return row;
         });
     }
 
-    function persist(task, progress) {
+    function persist(task: TaskRowRecord, progress: Progress): void {
         try {
             store.transaction(() => statements().setPayload.run(JSON.stringify(progress), task.id));
-        } catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; }
+        } catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; }
     }
 
-    function finalize(task, progress) {
+    function finalize(task: TaskRowRecord, progress: Progress): void {
         const attempts = (task.attempts ?? 0) + 1;
-        let status; let code; let nextAt;
+        let status: string;
+        let code: string | null;
+        let nextAt: number;
         if (progress.pending_ids.length) {
             status = 'pending';
             code = progress.error_code ?? CODE.UNPROVEN;
-            nextAt = now() + BACKOFF[Math.min(attempts, BACKOFF.length) - 1];
+            nextAt = now() + BACKOFF[Math.min(attempts, BACKOFF.length) - 1]!;
         } else if (progress.failed_ids.length) {
             status = 'failed';
             code = progress.error_code ?? CODE.UNPROVEN;
@@ -165,10 +235,10 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
                     pending_ids: progress.pending_ids, kept_ids: progress.kept_ids, code,
                 });
             });
-        } catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; }
+        } catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; }
     }
 
-    function finalizeInvalid(task, progress) {
+    function finalizeInvalid(task: TaskRowRecord, progress: Progress): void {
         try {
             store.transaction(() => {
                 store.db.prepare(`UPDATE tasks SET status='failed', error_code=?, lease_owner=NULL, next_at=?,
@@ -176,57 +246,57 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
                 audit('task', 'failed', { request_id: task.request_id, task_id: task.id },
                     { kind: CURATE, code: CODE.INVALID });
             });
-        } catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; }
+        } catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; }
     }
 
-    function safeRelease(task) {
+    function safeRelease(task: TaskRowRecord): void {
         try {
-            const row = statements().findTask.get(task.id);
+            const row = statements().findTask.get(task.id) as unknown as TaskRowRecord | undefined;
             if (!row || row.status !== 'running') return;
             const attempts = (task.attempts ?? 0) + 1;
             store.transaction(() => {
                 store.db.prepare(`UPDATE tasks SET status='pending', error_code=?, lease_owner=NULL, next_at=?, attempts=?
                     WHERE id=?`).run(lastError ?? CODE.UNAVAILABLE,
-                    now() + BACKOFF[Math.min(attempts, BACKOFF.length) - 1], attempts, task.id);
+                    now() + BACKOFF[Math.min(attempts, BACKOFF.length) - 1]!, attempts, task.id);
                 audit('task', 'pending', { request_id: task.request_id, task_id: task.id },
                     { kind: CURATE, code: lastError });
             });
-        } catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; }
+        } catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; }
     }
 
     // ── 远端读取（全分页）────────────────────────────────────────────────
-    function matchedRaws(source, units, state) {
-        return (Array.isArray(units) ? units : []).filter(raw => rawMatches(raw, source, state));
+    function matchedRaws(source: SourceSnapshot, units: unknown, state: string): Record<string, unknown>[] {
+        return (Array.isArray(units) ? units as Record<string, unknown>[] : []).filter(raw => rawMatches(raw as unknown as Parameters<typeof rawMatches>[0], source, state));
     }
 
-    async function cancelOperation(operationId, signal) {
-        let op = null;
-        try { op = await hindsight.cancel(operationId, { signal }); }
+    async function cancelOperation(operationId: string, signal?: AbortSignal): Promise<string> {
+        let op: { status?: unknown } | null;
+        try { op = await hindsight.cancel(operationId, { signal }) as { status?: unknown } | null; }
         catch { op = null; }
         if (!op || typeof op.status !== 'string') {
-            try { op = await hindsight.operation(operationId, { signal }); }
+            try { op = await hindsight.operation(operationId, { signal }) as { status?: unknown } | null; }
             catch { op = null; }
         }
-        return op?.status ?? 'unknown';
+        return typeof op?.status === 'string' ? op.status : 'unknown';
     }
 
     // ── forget / revoke 共用：撤回远端 raw ───────────────────────────────
-    async function retractCandidate(source, ctx) {
+    async function retractCandidate(source: SourceSnapshot, ctx: CurateContext): Promise<Outcome> {
         const { signal, requestId, task } = ctx;
         const cid = source.candidate.candidate_id;
         const epoch = store.policyEpoch;
-        const stale = () => signal?.aborted || store.policyEpoch !== epoch;
-        const changed = () => ({ state: 'pending', code: signal?.aborted ? CODE.STOPPED : CODE.POLICY_CHANGED });
+        const stale = (): boolean => Boolean(signal?.aborted) || store.policyEpoch !== epoch;
+        const changed = (): Outcome => ({ state: 'pending', code: signal?.aborted ? CODE.STOPPED : CODE.POLICY_CHANGED });
         if (signal?.aborted) return { state: 'pending', code: CODE.STOPPED };
 
         // 1) 先取消在途写操作（稳定 operation 身份；不 blind retry，不当作已撤回）
         let opPending = false;
         let unresolvedOp = false;
-        for (const write of statements().writeTasks.all(cid)) {
+        for (const write of statements().writeTasks.all(cid) as unknown as WriteTaskRow[]) {
             const status = write?.status;
             if (write?.operation_id && LANDED_WRITE.has(status)) continue;
             if (!write?.operation_id || !RUNNING_WRITE.has(status)) continue;
-            let opStatus;
+            let opStatus: string;
             try { opStatus = await cancelOperation(write.operation_id, signal); }
             catch (error) { const m = mapError(error, signal); if (m.state !== 'pending') return m; opPending = true; unresolvedOp = true; continue; }
             if (stale()) return changed();
@@ -235,7 +305,7 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         }
 
         // 2) doc + units(valid/invalidated) 精确证明
-        let document; let validUnits; let invalidUnits;
+        let document: unknown; let validUnits: unknown; let invalidUnits: unknown;
         try {
             document = await hindsight.document(source.documentId, { signal });
             if (stale()) return changed();
@@ -245,12 +315,12 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         } catch (error) { return mapError(error, signal); }
         if (stale()) return changed();
 
-        if (document && !documentMatches(document, source, hindsight.bank))
+        if (document && !documentMatches(document as unknown as Parameters<typeof documentMatches>[0], source, hindsight.bank))
             return { state: 'failed', code: CODE.MISMATCH };
 
         const matchedValid = matchedRaws(source, validUnits, 'valid');
         const matchedInvalid = matchedRaws(source, invalidUnits, 'invalidated');
-        const links = statements().rawLinks.all(cid);
+        const links = statements().rawLinks.all(cid) as unknown as RawLinkRow[];
 
         // 3) 远端为空：证明「没有落库」需要 op 已终态；否则保持跟踪
         if (!document && matchedValid.length === 0 && matchedInvalid.length === 0) {
@@ -273,18 +343,18 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
             if (link && link.version_hash !== version) return { state: 'failed', code: CODE.MISMATCH };
             if (!link) {
                 try {
-                    store.transaction(() => statements().insertLink.run(raw.id, cid, source.documentId, version, 'valid', now()));
+                    store.transaction(() => statements().insertLink.run(raw.id as string, cid, source.documentId, version, 'valid', now()));
                 } catch (error) { return mapError(error, signal); }
             }
             try {
-                await hindsight.invalidate(raw.id, { requestId, signal });
+                await hindsight.invalidate(raw.id as string, { requestId, signal });
             } catch (error) {
                 const m = mapError(error, signal);
                 if (m.state === 'failed') { failed = true; continue; } // 409 冲突：稍后重读判断
             }
             if (stale()) return changed();
 
-            let afterInvalid; let afterValid;
+            let afterInvalid: unknown; let afterValid: unknown;
             try {
                 afterInvalid = await hindsight.units(source.documentId, { state: 'invalidated', signal });
                 if (stale()) return changed();
@@ -292,14 +362,14 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
             } catch (error) { return mapError(error, signal); }
             if (stale()) return changed();
 
-            const okInvalid = (Array.isArray(afterInvalid) ? afterInvalid : [])
-                .some(item => item.id === raw.id && rawMatches(item, source, 'invalidated') && rawVersion(item) === version);
-            const stillValid = (Array.isArray(afterValid) ? afterValid : []).some(item => item.id === raw.id);
+            const okInvalid = (Array.isArray(afterInvalid) ? afterInvalid as Record<string, unknown>[] : [])
+                .some(item => item.id === raw.id && rawMatches(item as unknown as Parameters<typeof rawMatches>[0], source, 'invalidated') && rawVersion(item) === version);
+            const stillValid = (Array.isArray(afterValid) ? afterValid as Record<string, unknown>[] : []).some(item => item.id === raw.id);
             if (!okInvalid || stillValid) { pending = true; continue; }
 
             try {
                 store.transaction(() => {
-                    statements().markLink.run('invalidated', version, now(), raw.id);
+                    statements().markLink.run('invalidated', version, now(), raw.id as string);
                     audit('forget', 'invalidated', { request_id: task.request_id, task_id: task.id, candidate_id: cid },
                         { raw_id: raw.id });
                 });
@@ -313,8 +383,8 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
             if (link && link.version_hash !== version) { failed = true; continue; }
             try {
                 store.transaction(() => {
-                    if (link) statements().markLink.run('invalidated', version, now(), raw.id);
-                    else statements().insertLink.run(raw.id, cid, source.documentId, version, 'invalidated', now());
+                    if (link) statements().markLink.run('invalidated', version, now(), raw.id as string);
+                    else statements().insertLink.run(raw.id as string, cid, source.documentId, version, 'invalidated', now());
                 });
             } catch (error) { return mapError(error, signal); }
         }
@@ -328,9 +398,9 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
     }
 
     // ── restore ──────────────────────────────────────────────────────────
-    async function policyGate(source, ctx, restore) {
+    async function policyGate(source: SourceSnapshot, ctx: CurateContext, restore: boolean): Promise<GateResult> {
         if (ctx.signal?.aborted) return { state: 'pending', code: CODE.STOPPED };
-        let result;
+        let result: { allowed: boolean; epoch: number; code: string | null };
         try { result = await checkPolicy(source, ctx.task, { signal: ctx.signal, restore }); }
         catch { return { state: 'pending', code: CODE.POLICY_CHANGED }; }
         if (!result || result.allowed !== true) {
@@ -341,21 +411,21 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         return { epoch: result.epoch };
     }
 
-    async function restoreCandidate(source, ctx) {
+    async function restoreCandidate(source: SourceSnapshot, ctx: CurateContext): Promise<Outcome> {
         const { signal, task } = ctx;
         const cid = source.candidate.candidate_id;
         if (source.lifecycle.status !== 'unknown') return { state: 'failed', code: CODE.MISMATCH };
-        const links = statements().rawLinks.all(cid);
+        const links = statements().rawLinks.all(cid) as unknown as RawLinkRow[];
         if (links.length === 0) return { state: 'failed', code: CODE.SOURCE_MISSING };
         const requestId = uuidOr(task.request_id) ?? task.id;
 
         // 每个 await/变更/应用前都核验 restore 政策与 epoch（epoch 变更 -> 重新调度，不撤单）
-        let epoch = null;
-        async function gate() {
+        let epoch: number | null = null;
+        async function gate(): Promise<GateResult> {
             if (signal?.aborted) return { state: 'pending', code: CODE.STOPPED };
             const result = await policyGate(source, ctx, true);
             if (result.state) return result;
-            if (epoch === null) epoch = result.epoch;
+            if (epoch === null) epoch = result.epoch!;
             if (result.epoch !== epoch || store.policyEpoch !== epoch)
                 return { state: 'pending', code: CODE.POLICY_CHANGED };
             return {};
@@ -363,7 +433,7 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
 
         let g = await gate(); if (g.state) return g;
 
-        let document; let validUnits; let invalidUnits;
+        let document: unknown; let validUnits: unknown; let invalidUnits: unknown;
         g = await gate(); if (g.state) return g;
         try { document = await hindsight.document(source.documentId, { signal }); }
         catch (error) { return mapError(error, signal); }
@@ -375,17 +445,17 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         catch (error) { return mapError(error, signal); }
 
         g = await gate(); if (g.state) return g;
-        if (!document || !documentMatches(document, source, hindsight.bank)) return { state: 'failed', code: CODE.MISMATCH };
+        if (!document || !documentMatches(document as unknown as Parameters<typeof documentMatches>[0], source, hindsight.bank)) return { state: 'failed', code: CODE.MISMATCH };
 
         // 定位既有 link 对应的 raw：必须精确证明且语义版本与 link 一致
-        const resolved = [];
-        const pool = [...(Array.isArray(validUnits) ? validUnits : []), ...(Array.isArray(invalidUnits) ? invalidUnits : [])];
+        const resolved: ResolvedLink[] = [];
+        const pool: Record<string, unknown>[] = [...(Array.isArray(validUnits) ? validUnits as Record<string, unknown>[] : []), ...(Array.isArray(invalidUnits) ? invalidUnits as Record<string, unknown>[] : [])];
         for (const link of links) {
             if (!isId(link.raw_id)) return { state: 'failed', code: CODE.MISMATCH };
             const raw = pool.find(item => item.id === link.raw_id);
             if (!raw) return { state: 'pending', code: CODE.UNPROVEN };
             const state = raw.state === 'valid' ? 'valid' : raw.state === 'invalidated' ? 'invalidated' : null;
-            if (!state || !rawMatches(raw, source, state)) return { state: 'failed', code: CODE.MISMATCH };
+            if (!state || !rawMatches(raw as unknown as Parameters<typeof rawMatches>[0], source, state)) return { state: 'failed', code: CODE.MISMATCH };
             const version = rawVersion(raw);
             if (version !== link.version_hash) return { state: 'failed', code: CODE.MISMATCH };
             resolved.push({ link, raw, state, version });
@@ -395,15 +465,15 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         for (const entry of resolved) {
             if (entry.state !== 'invalidated') continue;
             g = await gate(); if (g.state) return g;
-            try { await hindsight.revert(entry.raw.id, { requestId, signal }); }
+            try { await hindsight.revert(entry.raw.id as string, { requestId, signal }); }
             catch (error) { const m = mapError(error, signal); if (m.state === 'failed') return m; /* 冲突/瞬时：重读判定 */ }
             g = await gate(); if (g.state) return g;
 
-            let afterValid;
+            let afterValid: unknown;
             try { afterValid = await hindsight.units(source.documentId, { state: 'valid', signal }); }
             catch (error) { return mapError(error, signal); }
-            const ok = (Array.isArray(afterValid) ? afterValid : [])
-                .some(item => item.id === entry.raw.id && rawMatches(item, source, 'valid') && rawVersion(item) === entry.version);
+            const ok = (Array.isArray(afterValid) ? afterValid as Record<string, unknown>[] : [])
+                .some(item => item.id === entry.raw.id && rawMatches(item as unknown as Parameters<typeof rawMatches>[0], source, 'valid') && rawVersion(item) === entry.version);
             if (!ok) return { state: 'pending', code: CODE.UNPROVEN };
             entry.state = 'valid';
         }
@@ -417,22 +487,23 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
                 if (store.policyEpoch !== epoch) throw Object.assign(new Error(CODE.POLICY_CHANGED), { code: CODE.POLICY_CHANGED });
                 const changed = statements().setLifecycle.run(target, epoch, now(), cid, 'unknown');
                 if (Number(changed.changes) !== 1) throw Object.assign(new Error(CODE.MISMATCH), { code: CODE.MISMATCH });
-                for (const entry of resolved) statements().markLink.run('valid', entry.version, now(), entry.raw.id);
+                for (const entry of resolved) statements().markLink.run('valid', entry.version, now(), entry.raw.id as string);
                 audit('forget', 'restored', { request_id: task.request_id, task_id: task.id, candidate_id: cid },
                     { status: target, links: resolved.length });
             });
         } catch (error) {
-            if (error?.code === CODE.POLICY_CHANGED) return { state: 'pending', code: CODE.POLICY_CHANGED };
+            const code = errorCodeOf(error);
+            if (code === CODE.POLICY_CHANGED) return { state: 'pending', code: CODE.POLICY_CHANGED };
             return mapError(error, signal);
         }
         return { state: 'succeeded' };
     }
 
-    async function processCandidate(id, ctx) {
-        let source;
+    async function processCandidate(id: string, ctx: CurateContext): Promise<Outcome> {
+        let source: SourceSnapshot | null;
         try { source = loadSource(store, id); }
         catch (error) {
-            if (error?.code === CODE.SNAPSHOT_INVALID) return { state: 'failed', code: CODE.SNAPSHOT_INVALID };
+            if (errorCodeOf(error) === CODE.SNAPSHOT_INVALID) return { state: 'failed', code: CODE.SNAPSHOT_INVALID };
             throw error;
         }
         if (!source) return { state: 'failed', code: CODE.SOURCE_MISSING };
@@ -444,14 +515,14 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         }
         // revoke：保留已有 active/history 记忆；仅清理在途/未落库的 pending/unknown
         if (ctx.kind === 'revoke') {
-            if (REVOKE_KEEP.has(source.lifecycle.status) || !REVOKE_RETRACT.has(source.lifecycle.status))
+            if (REVOKE_KEEP.has(source.lifecycle.status as string) || !REVOKE_RETRACT.has(source.lifecycle.status as string))
                 return { state: 'kept' };
             return retractCandidate(source, ctx);
         }
         return { state: 'failed', code: CODE.INVALID };
     }
 
-    function applyOutcome(progress, id, outcome) {
+    function applyOutcome(progress: Progress, id: string, outcome: Outcome): void {
         switch (outcome?.state) {
             case 'succeeded': progress.succeeded_ids.push(id); break;
             case 'kept': progress.kept_ids.push(id); break;
@@ -460,29 +531,29 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         }
     }
 
-    async function process(task, signal) {
-        const payload = parseJson(task.payload_json, {});
+    async function processTask(task: TaskRowRecord, signal?: AbortSignal): Promise<void> {
+        const payload = parseJson<Record<string, unknown>>(task.payload_json, {});
         const kind = payload.kind;
         const ids = Array.isArray(payload.candidate_ids)
-            ? [...new Set(payload.candidate_ids.filter(isId))] : [];
+            ? [...new Set((payload.candidate_ids as unknown[]).filter(isId))] : [];
 
         // 复用之前持久化的无正文进度：已确认的 id 不重做（幂等）
-        const progress = {
+        const progress: Progress = {
             kind, candidate_ids: ids,
-            attempted_ids: Array.isArray(payload.attempted_ids) ? [...payload.attempted_ids] : [],
-            succeeded_ids: Array.isArray(payload.succeeded_ids) ? [...payload.succeeded_ids] : [],
+            attempted_ids: Array.isArray(payload.attempted_ids) ? [...payload.attempted_ids as string[]] : [],
+            succeeded_ids: Array.isArray(payload.succeeded_ids) ? [...payload.succeeded_ids as string[]] : [],
             failed_ids: [],
-            pending_ids: [], kept_ids: Array.isArray(payload.kept_ids) ? [...payload.kept_ids] : [],
+            pending_ids: [], kept_ids: Array.isArray(payload.kept_ids) ? [...payload.kept_ids as string[]] : [],
             error_code: null,
         };
-        if (!KINDS.has(kind) || ids.length === 0) { finalizeInvalid(task, progress); return; }
+        if (typeof kind !== 'string' || !KINDS.has(kind) || ids.length === 0) { finalizeInvalid(task, progress); return; }
 
-        const ctx = { task, kind, requestId: uuidOr(task.request_id) ?? task.id, signal };
+        const ctx: CurateContext = { task, kind, requestId: uuidOr(task.request_id) ?? task.id, signal };
         for (const id of ids) {
             if (progress.succeeded_ids.includes(id) || progress.kept_ids.includes(id)) continue;
             if (signal?.aborted) { progress.pending_ids.push(id); progress.error_code ||= CODE.STOPPED; continue; }
             if (!progress.attempted_ids.includes(id)) progress.attempted_ids.push(id);
-            let outcome;
+            let outcome: Outcome;
             try { outcome = await processCandidate(id, ctx); }
             catch (error) { outcome = mapError(error, signal); }
             applyOutcome(progress, id, outcome);
@@ -491,24 +562,34 @@ export function createCurateWorker({ store, hindsight, checkPolicy, now = Date.n
         finalize(task, progress);
     }
 
-    async function runNext(signal) {
-        let task;
+    async function runNext(signal?: AbortSignal): Promise<boolean> {
+        let task: TaskRowRecord | null;
         try { task = claim(); }
-        catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; return false; }
+        catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; return false; }
         if (!task) return false;
-        try { await process(task, signal); }
-        catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; safeRelease(task); }
+        try { await processTask(task, signal); }
+        catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; safeRelease(task); }
         return true;
     }
 
-    function health() {
-        const tasks = {};
+    function health(): { kind: string; tasks: Record<string, number>; total: number; last_error: string | null } {
+        const tasks: Record<string, number> = {};
         let total = 0;
         try {
-            for (const row of statements().counts.all()) { tasks[row.status] = row.n; total += row.n; }
-        } catch (error) { lastError = error?.code ?? CODE.UNAVAILABLE; }
+            for (const row of statements().counts.all() as unknown as CountRow[]) { tasks[row.status] = row.n; total += row.n; }
+        } catch (error) { lastError = errorCodeOf(error) ?? CODE.UNAVAILABLE; }
         return { kind: CURATE, tasks, total, last_error: lastError };
     }
 
     return { runNext, health };
+}
+
+function errorCodeOf(error: unknown): string | null {
+    return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : null;
+}
+function errorStatusOf(error: unknown): number | null {
+    return error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : null;
+}
+function errorNameOf(error: unknown): string | null {
+    return error && typeof error === 'object' && 'name' in error && typeof error.name === 'string' ? error.name : null;
 }

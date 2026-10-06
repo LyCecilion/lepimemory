@@ -1,5 +1,5 @@
 /**
- * recall-source.js — 取回期的来源绑定（Lepimemory 运行时收敛 Step 8 前置）。
+ * recall-source.ts — 取回期的来源绑定（Lepimemory 运行时收敛 Step 8 前置）。
  *
  * 作用：把 Hindsight recall 返回的 `raw_id`（以及 observation 的当前来源 ID）绑回
  * **不可变获准快照**，并证明「当前远端 link/document/raw 身份」与本地政策一致，
@@ -17,6 +17,9 @@
  * 避免重复请求；`refresh()` 同步清空这些缓存但**保留同一 4 页兜底预算**，供父级在
  * `processor.verifyObservation` 之后强制刷新远端证明再重新 resolve。
  */
+import type { StatementSync } from 'node:sqlite';
+import type { RecallPurpose } from './shared/domain.js';
+import type { HindsightClient, RecallSource } from './hindsight.js';
 import { loadSource, rawMatches, documentMatches, rawVersion } from './raw-source.js';
 
 /** 已知文档兜底：每个实例最多 4 次分页请求（每次 100 行）。 */
@@ -35,11 +38,53 @@ const CODE = Object.freeze({
     OBSERVATION_INCOMPLETE: 'LEPI_OBSERVATION_INCOMPLETE',
 });
 
+/** 只读本模块用到的 store 结构面（db.prepare + policyEpoch）。 */
+interface StoreLike {
+    db: { prepare(sql: string): StatementSync };
+    policyEpoch: number;
+}
+
+/** `raw_links` 行：只读身份/版本列。 */
+interface LinkRow {
+    candidate_id: string;
+    document_id: string;
+    version_hash: string;
+    state: string;
+}
+
+/** resolve 产出的已核对来源复合体（hindsight 的 RecallSource 结构子集）。 */
+export type RecallSourceView = RecallSource;
+
+/** recall 结果的最小结构面（observationIds 只读这些字段）。 */
+export interface RecallResultLike {
+    id?: unknown;
+    text?: unknown;
+    source_fact_ids?: unknown;
+}
+
+interface ResolveOptions {
+    purpose?: RecallPurpose;
+    signal?: AbortSignal;
+    epoch?: number;
+}
+
+interface ObservationOptions {
+    signal?: AbortSignal;
+    epoch?: number;
+    truncated?: boolean;
+}
+
+/** 记忆化结果：成功带 value，失败带 error（两者都缓存，不重复打远端）。 */
+interface MemoResult<T> {
+    value?: T;
+    error?: unknown;
+}
+
 /** 归一化 id 列表：全为非空字符串才有效，否则 null（缺失/畸形）。 */
-function normalizedIds(value) {
+function normalizedIds(value: unknown): string[] | null {
     if (!Array.isArray(value)) return null;
-    const out = [];
-    const seen = new Set();
+    const out: string[] = [];
+    const seen = new Set<string>();
     for (const entry of value) {
         if (typeof entry !== 'string' || entry.length === 0) return null;
         if (!seen.has(entry)) { seen.add(entry); out.push(entry); }
@@ -48,59 +93,53 @@ function normalizedIds(value) {
 }
 
 /** recall 结果里可安全使用的已知 id（畸形时降级为空列表）。 */
-function knownIds(result) {
+function knownIds(result: RecallResultLike | null | undefined): string[] {
     return normalizedIds(result?.source_fact_ids) ?? [];
 }
 
-function isCurrentObservation(raw, result) {
-    return Boolean(raw && raw.state === 'valid'
-        && (raw.type === 'observation' || raw.fact_type === 'observation')
-        && typeof raw.text === 'string' && typeof result?.text === 'string' && raw.text === result.text);
-}
-
 /**
- * @param {object} deps
- * @param {object} deps.store `openStore` 产物（本模块只读，不写行/状态）。
- * @param {object} deps.hindsight `HindsightClient`（`bank` / `raw` / `document` / `unitsPage`）。
- * @param {(source:object, purpose:*) => string|null} deps.checkSource 父级 `candidateExclusion`：
- *   同步返回 `null` 或稳定、无正文的排除码。source 为 `{candidate,lifecycle,payloadHash,documentId,link,raw,document,bank}`。
- * @param {() => number} [deps.now] 预留（时间政策由 `checkSource` 负责）。
- * @returns {{ resolve:Function, observationIds:Function, refresh:Function }}
+ * @param deps.store `openStore` 产物（本模块只读，不写行/状态）。
+ * @param deps.hindsight `HindsightClient`（`bank` / `raw` / `document` / `unitsPage`）。
+ * @param deps.checkSource 父级 `candidateExclusion`：同步返回 `null` 或稳定、无正文的排除码。
+ * @param deps.now 预留（时间政策由 `checkSource` 负责）。
  */
-export function createRecallSources({ store, hindsight, checkSource, now = Date.now }) {
-    const documents = new Map();
-    const raws = new Map();
+export function createRecallSources({ store, hindsight, checkSource, now: _now = Date.now }: {
+    store: StoreLike;
+    hindsight: HindsightClient;
+    checkSource: (source: RecallSourceView, purpose: RecallPurpose | undefined) => string | null;
+    now?: () => number;
+}): {
+    resolve(rawId: unknown, options?: ResolveOptions): Promise<{ source: RecallSourceView | null; code: string | null }>;
+    observationIds(result: RecallResultLike | null | undefined, options?: ObservationOptions): Promise<{ ids: string[]; complete: boolean; code: string | null }>;
+    refresh(): void;
+} {
+    const documents = new Map<string, Promise<MemoResult<unknown>>>();
+    const raws = new Map<string, Promise<MemoResult<Record<string, unknown> | null>>>();
     // 单一全局兜底预算：跨 resolve/observationIds/refresh 共享，绝不重置。
     let pageRequests = 0;
-    let linkStatement = null;
+    let linkStatement: StatementSync | null = null;
 
-    function linkFor(rawId) {
+    function linkFor(rawId: string): LinkRow | null {
         linkStatement ??= store.db.prepare(
             'SELECT raw_id,candidate_id,document_id,version_hash,state,verified_at FROM raw_links WHERE raw_id=?');
-        return linkStatement.get(rawId) ?? null;
+        return (linkStatement.get(rawId) as unknown as LinkRow | undefined) ?? null;
     }
 
-    function policy(source, purpose) {
-        let code;
+    function policy(source: RecallSourceView, purpose: RecallPurpose | undefined): string | null {
+        let code: string | null;
         try { code = checkSource(source, purpose); }
         catch { return CODE.POLICY; }
         return typeof code === 'string' && code.length > 0 ? code : null;
     }
 
     /** 把一次读取固定为同一 Promise，避免同实例重复请求；错误也缓存（不重复打远端）。 */
-    function memo(map, key, load) {
+    function memo<T>(map: Map<string, Promise<MemoResult<T>>>, key: string, load: () => Promise<T>): Promise<MemoResult<T>> {
         if (!map.has(key)) map.set(key, Promise.resolve().then(load).then(value => ({ value }), error => ({ error })));
-        return map.get(key);
+        return map.get(key)!;
     }
 
-    const getDocument = (documentId, signal) =>
-        memo(documents, documentId, () => hindsight.document(documentId, { signal }));
-
-    const getRawDetail = (rawId, signal) =>
-        memo(raws, rawId, () => hindsight.raw(rawId, { signal }));
-
     /** 有界文档分页兜底：直接 raw 查询 404/不可用时的已知文档扫描。 */
-    async function scanDocument(documentId, rawId, signal, guard) {
+    async function scanDocument(documentId: string, rawId: string, signal: AbortSignal | undefined, guard: () => string | null): Promise<{ raw: Record<string, unknown> | null; complete?: boolean; code?: string }> {
         let offset = 0;
         for (;;) {
             if (signal?.aborted) return { raw: null, code: CODE.ABORTED };
@@ -121,8 +160,8 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         }
     }
 
-    async function resolveRaw(rawId, source, signal, guard) {
-        const direct = await getRawDetail(rawId, signal);
+    async function resolveRaw(rawId: string, source: RecallSourceView, signal: AbortSignal | undefined, guard: () => string | null): Promise<{ raw: Record<string, unknown> | null; complete?: boolean; code?: string }> {
+        const direct = await memo(raws, rawId, () => hindsight.raw(rawId, { signal }));
         const policyCode = guard();
         if (policyCode) return { raw: null, code: policyCode };
         if (!direct.error && direct.value != null) return { raw: direct.value, complete: true };
@@ -131,11 +170,8 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         return scanDocument(source.documentId, rawId, signal, guard);
     }
 
-    /**
-     * 解析单个 recall raw id → 不可变来源复合体。
-     * @returns {Promise<{source:object|null, code:string|null}>}
-     */
-    async function resolve(rawId, { purpose, signal, epoch } = {}) {
+    /** 解析单个 recall raw id → 不可变来源复合体。 */
+    async function resolve(rawId: unknown, { purpose, signal, epoch }: ResolveOptions = {}): Promise<{ source: RecallSourceView | null; code: string | null }> {
         if (typeof rawId !== 'string' || rawId.length === 0) return { source: null, code: CODE.UNLINKED };
         if (signal?.aborted) return { source: null, code: CODE.ABORTED };
 
@@ -145,20 +181,21 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         let loaded;
         try { loaded = loadSource(store, link.candidate_id); }
         catch (error) {
-            return { source: null, code: error?.code === CODE.SNAPSHOT_INVALID ? CODE.SNAPSHOT_INVALID : CODE.UNAVAILABLE };
+            const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
+            return { source: null, code: code === CODE.SNAPSHOT_INVALID ? CODE.SNAPSHOT_INVALID : CODE.UNAVAILABLE };
         }
         if (!loaded) return { source: null, code: CODE.SNAPSHOT_INVALID };
         if (link.document_id !== loaded.documentId || link.state !== 'valid') return { source: null, code: CODE.CHANGED };
 
         const bank = hindsight?.bank ?? null;
-        let source = {
+        let source: RecallSourceView = {
             candidate: loaded.candidate, lifecycle: loaded.lifecycle, payloadHash: loaded.payloadHash,
             documentId: loaded.documentId, link, raw: null, document: null, bank,
         };
 
         let code = policy(source, purpose);
         if (code) return { source: null, code };
-        const guard = () => {
+        const guard = (): string | null => {
             if (signal?.aborted) return CODE.ABORTED;
             if (epoch != null && store.policyEpoch !== epoch) return CODE.POLICY;
             const currentLink = linkFor(rawId);
@@ -173,7 +210,7 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         code = guard();
         if (code) return { source: null, code };
 
-        const docResult = await getDocument(loaded.documentId, signal);
+        const docResult = await memo(documents, loaded.documentId, () => hindsight.document(loaded.documentId, { signal }));
         code = guard();
         if (code) return { source: null, code };
         const rawResult = await resolveRaw(rawId, source, signal, guard);
@@ -182,11 +219,11 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         if (signal?.aborted) return { source: null, code: CODE.ABORTED };
 
         if (docResult.error) return { source: null, code: CODE.UNAVAILABLE };
-        if (!documentMatches(docResult.value, source, bank)) return { source: null, code: CODE.CHANGED };
+        if (!documentMatches(docResult.value as Parameters<typeof documentMatches>[0], source, bank)) return { source: null, code: CODE.CHANGED };
         if (rawResult.code) return { source: null, code: rawResult.code };
         if (!rawResult.raw) return { source: null, code: rawResult.complete ? CODE.MISSING : CODE.UNKNOWN };
         const raw = rawResult.raw;
-        if (!rawMatches(raw, source, 'valid')) return { source: null, code: CODE.CHANGED };
+        if (!rawMatches(raw as Parameters<typeof rawMatches>[0], source, 'valid')) return { source: null, code: CODE.CHANGED };
         if (rawVersion(raw) !== link.version_hash) return { source: null, code: CODE.CHANGED };
 
         // await 之后重新核验：epoch、当前 link/生命周期、当前政策。
@@ -200,14 +237,14 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
         catch { return { source: null, code: CODE.SNAPSHOT_INVALID }; }
         if (!fresh) return { source: null, code: CODE.SNAPSHOT_INVALID };
 
-        source = { ...source, lifecycle: fresh.lifecycle, link: freshLink, raw, document: docResult.value };
+        source = { ...source, lifecycle: fresh.lifecycle, link: freshLink, raw, document: docResult.value as Record<string, unknown> | null };
         code = policy(source, purpose);
         if (code) return { source: null, code };
         if (signal?.aborted) return { source: null, code: CODE.ABORTED };
         return { source, code: null };
     }
 
-    function fallbackIds(result, truncated) {
+    function fallbackIds(result: RecallResultLike | null | undefined, truncated: boolean | undefined): { ids: string[]; complete: boolean; code: string | null } {
         const ids = normalizedIds(result?.source_fact_ids);
         if (truncated === false && ids && ids.length > 0) return { ids, complete: true, code: null };
         return { ids: ids ?? [], complete: false, code: CODE.OBSERVATION_INCOMPLETE };
@@ -218,19 +255,20 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
      * 优先后端当前 observation 详情（state=valid、type=observation、正文与 recall 一致）；
      * 详情不可用时退回未截断且良构的 recall `source_fact_ids`；截断/缺失一律 fail closed
      * （`complete:false`，父级只允许按快照处理）。
-     * @returns {Promise<{ids:string[], complete:boolean, code:string|null}>}
      */
-    async function observationIds(result, { signal, epoch, truncated } = {}) {
+    async function observationIds(result: RecallResultLike | null | undefined, { signal, epoch, truncated }: ObservationOptions = {}): Promise<{ ids: string[]; complete: boolean; code: string | null }> {
         if (signal?.aborted) return { ids: knownIds(result), complete: false, code: CODE.ABORTED };
         const id = typeof result?.id === 'string' && result.id.length > 0 ? result.id : null;
         if (!id) return fallbackIds(result, truncated);
 
-        const detail = await getRawDetail(id, signal);
+        const detail = await memo(raws, id, () => hindsight.raw(id, { signal }));
         if (signal?.aborted) return { ids: knownIds(result), complete: false, code: CODE.ABORTED };
         if (epoch != null && store.policyEpoch !== epoch)
             return { ids: knownIds(result), complete: false, code: CODE.POLICY };
 
-        if (!detail.error && isCurrentObservation(detail.value, result)) {
+        if (!detail.error && detail.value != null && detail.value.state === 'valid'
+            && (detail.value.type === 'observation' || detail.value.fact_type === 'observation')
+            && typeof detail.value.text === 'string' && typeof result?.text === 'string' && detail.value.text === result.text) {
             const ids = normalizedIds(detail.value.source_memory_ids);
             if (ids && ids.length > 0) return { ids, complete: true, code: null };
             return { ids: ids ?? [], complete: false, code: CODE.OBSERVATION_INCOMPLETE };
@@ -244,7 +282,7 @@ export function createRecallSources({ store, hindsight, checkSource, now = Date.
      * 同步清空 raw/document 详情缓存（无 I/O），保留同一全局 4 页兜底预算。
      * 供父级在 `processor.verifyObservation` 之后强制刷新远端证明、再重新 resolve。
      */
-    function refresh() {
+    function refresh(): void {
         documents.clear();
         raws.clear();
     }

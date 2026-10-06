@@ -1,5 +1,5 @@
 /**
- * state-runtime.js — 状态会话运行时（Lepimemory 运行时收敛 Step 10）。
+ * state-runtime.ts — 状态会话运行时（Lepimemory 运行时收敛 Step 10）。
  *
  * 职责（与既有 state/machine/store 的关系）：
  *   - `observe(session, event)`：串联真实 `session/event`（`turn/start` / `user/message` /
@@ -21,58 +21,101 @@
  *     重复 `turn/end`/重放/重启由 `settled_turns` 与 `state_applied` 保证不二次 brighten/衰减。
  *   - 每次 state 提交的审计都带**完整 state 前后值**（`before`/`after` 是整个 state 对象），
  *     `mood.decay` 也不例外；turn 结算的 `state` 审计为权威终值。
- *
- * 跨重启的回合事实（仅元数据、**不含正文**）：
- *   进程在 turn 中途重启会丢掉 heap 里的 userMessages/toolFailures/callName。为不误算心境，
- *   这些最小事实（含最后观察到的 seq）在短事务里持久化到 `meta['turn_facts:<sessionId>']`，
- *   后续 observe（含新实例）会重建，并在**同一个结算事务**中删除。它只是这个回合的临时账本，
- *   不是新的全局同步器；`actions`/`settled_turns` 的持久保证不变。只读 store 不写它。
- *
- * 已知决策（交父级集成确认）：
- *   行动 journal 在 turn 已结算之后才被标记 `executed`（renderer/pipeline 迟到恢复）时，
- *   采用**精确一次回收**：仅当 `settled_turns` 已存在该 (session,turn) 时，用独立事务补一次
- *   成功增量并置 `state_applied=1`。turn 未结算且没有回合事实重建依据时保守跳过，
- *   不臆造整轮事实。
  */
 import { advance, decayMood } from './machine.js';
+import type { RoundFacts } from './machine.js';
 import { renderState } from './shared/state.js';
+import type { LepiState } from './shared/state.js';
+import type { Store } from './store.js';
 
 /** 审批/控制类工具：其（即使 isError 的）结果绝不折算成工具失败。 */
-const DEFAULT_CONTROL_TOOLS = new Set(['manage_memory']);
+const DEFAULT_CONTROL_TOOLS = ['manage_memory'];
 
 /** journal 里明确「没执行」的状态；既不是成功也不是失败，直接忽略。 */
-const NOT_FAILURES = new Set(['prepared', 'rejected', 'cancelled', 'unavailable', 'unknown']);
+const NOT_FAILURES: Record<string, true> = {
+    prepared: true, rejected: true, cancelled: true, unavailable: true, unknown: true,
+};
 
 const TURN_END_STATUS = 'settled';
 const META_PREFIX = 'turn_facts:';
 
-function numOrNull(value) {
-    return Number.isSafeInteger(value) ? value : null;
+/** 一个 turn 的内存账本：只含结构事实（无正文）。 */
+interface TurnState {
+    turn: number | null;
+    userMessages: number;
+    toolFailures: number;
+    calls: Map<string, string>;
+    seq: number | null;
 }
 
-function sessionIdOf(session) {
-    const id = session?.id;
+/** session/event 的最小结构面（只读这些字段）。 */
+interface EventMessageLike {
+    toolCallId?: unknown;
+    isError?: unknown;
+}
+interface EventDataLike {
+    turn?: number | null;
+    source?: { kind?: string } | null;
+    callId?: unknown;
+    name?: unknown;
+    message?: EventMessageLike | null;
+}
+interface SessionEventLike {
+    type?: string;
+    seq?: number;
+    data?: EventDataLike;
+}
+
+interface MetaRow {
+    value: string;
+}
+interface ActionStatusRow {
+    action_id: string;
+    status: string;
+    state_applied: number;
+}
+interface ActionJoinRow {
+    action_id: string;
+    session_id: string;
+    turn: number | null;
+}
+interface ExecutedRow {
+    action_id: string;
+}
+interface TurnCallRow {
+    action_id: string;
+    step: number;
+    call_id: string;
+    status: string;
+}
+
+function numOrNull(value: unknown): number | null {
+    return Number.isSafeInteger(value) ? (value as number) : null;
+}
+
+function sessionIdOf(session: unknown): string | null {
+    if (!session || typeof session !== 'object' || !('id' in session)) return null;
+    const id = session.id;
     return id == null ? null : String(id);
 }
 
 /**
- * @param {{ store: object, now?: () => number, controlTools?: Set<string> }} deps
- *   - store: `openStore()` 产物（本模块只用其 `db` / `readOnly` / 同步事务与读）。
- * @returns {{
- *   observe(session: object, event: object): void,
- *   text(context?: { agent?: object }): string,
- *   readEffective(): object,
- * }}
+ * @param deps.store `openStore()` 产物（本模块只用其 `db` / `readOnly` / 同步事务与读）。
  */
-export function createStateRuntime({ store, now = Date.now, controlTools } = {}) {
-    if (!store || !store.db || typeof store.db.prepare !== 'function') throw new Error('LEPI_STORE_UNAVAILABLE');
+export function createStateRuntime({ store: input, now = Date.now, controlTools }: {
+    store?: Store;
+    now?: () => number;
+    controlTools?: Set<string>;
+} = {}) {
+    if (!input || !input.db || typeof input.db.prepare !== 'function') throw new Error('LEPI_STORE_UNAVAILABLE');
+    const store = input;
     const db = store.db;
     const clock = typeof now === 'function' ? now : Date.now;
     const writable = store.readOnly !== true;
-    const control = controlTools instanceof Set ? controlTools : DEFAULT_CONTROL_TOOLS;
+    const control = controlTools instanceof Set ? controlTools : new Set(DEFAULT_CONTROL_TOOLS);
 
     // sessionId -> { turn, userMessages, toolFailures, calls: Map<callId,name>, seq }
-    const turns = new Map();
+    const turns = new Map<string, TurnState>();
 
     const selectAction = db.prepare(
         'SELECT action_id,session_id,turn,status,state_applied FROM actions WHERE session_id=? AND call_id=?',
@@ -95,7 +138,7 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     const deleteMeta = db.prepare('DELETE FROM meta WHERE key=?');
 
     /** 只读有效视图：按 clock 衰减 mood，不落库（diagnostic）。 */
-    function effectiveView(atMs) {
+    function effectiveView(atMs: number): LepiState {
         const state = store.readState();
         const decayed = decayMood(state.mood, atMs);
         if (!decayed.changed) return state;
@@ -107,37 +150,37 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     }
 
     /** 从 meta 重建中途重启丢失的回合事实（只在内存中没有该 session 时）。 */
-    function loadTurn(sessionId) {
+    function loadTurn(sessionId: string): TurnState | undefined {
         const cached = turns.get(sessionId);
         if (cached) return cached;
         if (!writable) return undefined;
-        let row;
+        let row: MetaRow | undefined;
         try {
-            row = readMeta.get(META_PREFIX + sessionId);
+            row = readMeta.get(META_PREFIX + sessionId) as unknown as MetaRow | undefined;
         } catch {
             return undefined;
         }
         if (!row) return undefined;
-        let data;
+        let data: { turn?: unknown; userMessages?: unknown; toolFailures?: unknown; calls?: unknown; seq?: unknown };
         try {
-            data = JSON.parse(row.value);
+            data = JSON.parse(row.value) as typeof data;
         } catch {
             return undefined;
         }
         if (!data || !Number.isSafeInteger(data.turn)) return undefined;
-        const restored = {
-            turn: data.turn,
-            userMessages: Number.isSafeInteger(data.userMessages) ? data.userMessages : 0,
-            toolFailures: Number.isSafeInteger(data.toolFailures) ? data.toolFailures : 0,
-            calls: new Map(Array.isArray(data.calls) ? data.calls : []),
-            seq: Number.isSafeInteger(data.seq) ? data.seq : null,
+        const restored: TurnState = {
+            turn: data.turn as number,
+            userMessages: Number.isSafeInteger(data.userMessages) ? (data.userMessages as number) : 0,
+            toolFailures: Number.isSafeInteger(data.toolFailures) ? (data.toolFailures as number) : 0,
+            calls: new Map((Array.isArray(data.calls) ? data.calls : []) as Array<[string, string]>),
+            seq: Number.isSafeInteger(data.seq) ? (data.seq as number) : null,
         };
         turns.set(sessionId, restored);
         return restored;
     }
 
     /** 持久化回合事实（仅元数据，无正文）；短事务。 */
-    function persistTurn(sessionId, turnState) {
+    function persistTurn(sessionId: string, turnState: TurnState | undefined): void {
         if (!writable || !turnState) return;
         const value = JSON.stringify({
             turn: turnState.turn,
@@ -150,7 +193,7 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     }
 
     /** 由 mood 衰减结果构造完整 decayed state（供 mood.decay 审计的 after）。 */
-    function decayedState(state, atMs) {
+    function decayedState(state: LepiState, atMs: number): { decayed: { valence: number; arousal: number; changed: boolean }; next: LepiState } {
         const decayed = decayMood(state.mood, atMs);
         if (!decayed.changed) return { decayed, next: state };
         const next = structuredClone(state);
@@ -161,27 +204,24 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     }
 
     /** turn/end：在未结算的真实 turn 事务内应用事实 + 剩余衰减 + state_applied + settled + 审计。 */
-    function settle(sessionId, turn, facts) {
+    function settle(sessionId: string, turn: number | null, facts: TurnState | undefined): void {
         if (turn == null) return; // 无 turn 身份不结算（不伪造 turn）
         const key = META_PREFIX + sessionId;
         store.transaction(() => {
             const alreadySettled = Boolean(selectSettled.get(sessionId, turn));
-            const pending = readMeta.get(key);
-            if (pending && JSON.parse(pending.value).turn === turn) deleteMeta.run(key);
+            const pending = readMeta.get(key) as unknown as MetaRow | undefined;
+            if (pending && (JSON.parse(pending.value) as { turn?: unknown }).turn === turn) deleteMeta.run(key);
             if (alreadySettled) return;
             const at = clock();
             const state = store.readState();
             const { decayed, next: decayedNext } = decayedState(state, at);
-            const executed = selectUnappliedExecuted.all(sessionId, turn);
-            const result = advance(
-                state,
-                {
-                    userMessages: facts?.userMessages ?? 0,
-                    toolFailures: facts?.toolFailures ?? 0,
-                    actionSuccesses: executed.length,
-                },
-                at,
-            );
+            const executed = selectUnappliedExecuted.all(sessionId, turn) as unknown as ExecutedRow[];
+            const roundFacts: RoundFacts = {
+                userMessages: facts?.userMessages ?? 0,
+                toolFailures: facts?.toolFailures ?? 0,
+                actionSuccesses: executed.length,
+            };
+            const result = advance(state, roundFacts, at);
             insertSettled.run(sessionId, turn, at);
             for (const row of executed) markApplied.run(row.action_id);
             if (result.changed) updateState.run(JSON.stringify(result.state));
@@ -207,7 +247,7 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
                         after: result.state,
                         fired: result.fired,
                         changes: result.changes,
-                        action_calls: selectTurnCalls.all(sessionId, turn),
+                        action_calls: selectTurnCalls.all(sessionId, turn) as unknown as TurnCallRow[],
                     },
                 });
             }
@@ -218,15 +258,15 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
      * 迟到的「已执行行动」精确一次回收。
      * 仅在 (session,turn) 已结算（说明该轮确实结束且当时未计入）时补记一次成功。
      */
-    function recoverExecutedAction(row) {
+    function recoverExecutedAction(row: ActionJoinRow): void {
         const sessionId = row.session_id;
         const turn = numOrNull(row.turn);
         if (sessionId == null || turn == null) return;
         if (!selectSettled.get(sessionId, turn)) return; // 未结算：保守跳过
         store.transaction(() => {
-            const fresh = selectActionById.get(row.action_id);
+            const fresh = selectActionById.get(row.action_id) as unknown as ActionStatusRow | undefined;
             if (!fresh || fresh.status !== 'executed' || fresh.state_applied) return;
-            const pending = selectUnappliedExecuted.all(sessionId, turn);
+            const pending = selectUnappliedExecuted.all(sessionId, turn) as unknown as ExecutedRow[];
             const alreadyCounted = db.prepare("SELECT 1 FROM actions WHERE session_id=? AND turn=? AND status='executed' AND state_applied=1 LIMIT 1").get(sessionId, turn);
             const at = clock();
             const state = store.readState();
@@ -246,7 +286,7 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
                     changes: result.changes,
                     recovered: true,
                     action_ids: pending.map(action => action.action_id),
-                    action_calls: selectTurnCalls.all(sessionId, turn),
+                    action_calls: selectTurnCalls.all(sessionId, turn) as unknown as TurnCallRow[],
                     already_counted: Boolean(alreadyCounted),
                     reason: 'action_executed_after_settle',
                 },
@@ -255,14 +295,14 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     }
 
     /** Explicit startup reconciliation after the file journal has been recovered. */
-    function reconcileActions() {
+    function reconcileActions(): void {
         const rows = db.prepare(`SELECT a.action_id,a.session_id,a.turn FROM actions a
             JOIN settled_turns s ON s.session_id=a.session_id AND s.turn=a.turn
-            WHERE a.status='executed' AND a.state_applied=0`).all();
+            WHERE a.status='executed' AND a.state_applied=0`).all() as unknown as ActionJoinRow[];
         for (const row of rows) recoverExecutedAction(row);
     }
 
-    function handleToolResult(sessionId, event) {
+    function handleToolResult(sessionId: string, event: SessionEventLike): void {
         const turnState = loadTurn(sessionId);
         const message = event.data?.message;
         const callId = message?.toolCallId != null ? String(message.toolCallId) : null;
@@ -270,14 +310,14 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
         const name = callId ? turnState?.calls?.get(callId) : undefined;
         if (name && control.has(name)) return; // 控制/管理工具：绝不折算成工具失败
 
-        const row = callId ? selectAction.get(sessionId, callId) : undefined;
+        const row = callId ? (selectAction.get(sessionId, callId) as unknown as ActionStatusRow | undefined) : undefined;
         if (row) {
             if (row.status === 'executed') {
                 if (row.state_applied) return; // 已计入；renderer 报错不得变成失败
-                if (!turnState) recoverExecutedAction(row);
+                if (!turnState) recoverExecutedAction({ action_id: row.action_id, session_id: sessionId, turn: numOrNull(event.data?.turn) });
                 return; // 未结算轮：留到 turn/end 事务统一应用
             }
-            if (NOT_FAILURES.has(row.status)) return;
+            if (NOT_FAILURES[row.status] === true) return;
             if (row.status === 'failed' && turnState) {
                 turnState.toolFailures += 1;
                 persistTurn(sessionId, turnState);
@@ -292,15 +332,15 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
     }
 
     /** 纯 observe：绝不 `session.append`；失败必须被吞掉，不能影响 session append 边界。 */
-    function observe(session, event) {
+    function observe(session: { id?: unknown } | null | undefined, event: SessionEventLike | null | undefined): void {
         if (!session || !event || !event.type) return;
         const sessionId = sessionIdOf(session);
         if (sessionId == null) return;
-        const seq = Number.isSafeInteger(event.seq) ? event.seq : null;
+        const seq = Number.isSafeInteger(event.seq) ? (event.seq as number) : null;
         try {
             switch (event.type) {
                 case 'turn/start': {
-                    const fresh = {
+                    const fresh: TurnState = {
                         turn: numOrNull(event.data?.turn),
                         userMessages: 0,
                         toolFailures: 0,
@@ -355,7 +395,7 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
      * （完整 state 前后值）；无 agent（diagnostic）只读有效视图，绝不提交。
      * 失败 fail-closed：抛稳定错误，绝不渲染缓冲/旧状态。
      */
-    function text(context = {}) {
+    function text(context: { agent?: unknown } = {}): string {
         const at = clock();
         const sessionId = context && typeof context === 'object' ? sessionIdOf(context.agent) : null;
         try {
@@ -363,13 +403,11 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
                 return renderState(effectiveView(at), at);
             }
             const observedTurn = loadTurn(sessionId)?.turn ?? null;
-            let effective;
-            store.transaction(() => {
+            const effective = store.transaction(() => {
                 const state = store.readState();
                 const { decayed, next } = decayedState(state, at);
                 if (!decayed.changed) {
-                    effective = state;
-                    return;
+                    return state;
                 }
                 updateState.run(JSON.stringify(next));
                 store.audit({
@@ -380,16 +418,16 @@ export function createStateRuntime({ store, now = Date.now, controlTools } = {})
                     turn: observedTurn,
                     data: { before: state, after: next },
                 });
-                effective = next;
+                return next;
             });
             return renderState(effective, at);
         } catch (error) {
-            if (error && error.code) throw error; // 传播既有 StoreError 等稳定错误
-            throw new Error('LEPI_STATE_UNAVAILABLE');
+            if (error && typeof error === 'object' && 'code' in error && error.code) throw error; // 传播既有 StoreError 等稳定错误
+            throw new Error('LEPI_STATE_UNAVAILABLE', { cause: error });
         }
     }
 
-    function readEffective() {
+    function readEffective(): LepiState {
         return effectiveView(clock());
     }
 
