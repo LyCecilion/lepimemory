@@ -5,8 +5,10 @@
   "description": "Lepimemory 角色运行时插件：SQLite 状态与审计、逐候选理解与准入、授权和 canonical 遗忘、可核实 Hindsight 写入与政策召回、manage_memory 控制、write_note 真实便条与 React 操作者面板。",
   "type": "module",
   "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
+      "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": "./client.js"
