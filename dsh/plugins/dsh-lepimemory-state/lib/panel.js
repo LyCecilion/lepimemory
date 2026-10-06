@@ -50,7 +50,7 @@ const RESUBMIT_CODE = "LEPI_INPUT_RESUBMIT_REQUIRED";
 const AVATAR_DIR = fileURLToPath(new URL("../assets/avatar/", import.meta.url));
 /** 立绘 key 形状：短、小写、可带连字符；只有清单内的 key 才会被读取。 */
 const AVATAR_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
-/** 惰性 Buffer 缓存：素材在进程内不可变，命中即不再读盘。 */
+/** key → { mtimeMs, buffer }：按 mtime 失效，替换素材后无需重启即生效。 */
 const avatarCache = new Map();
 
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -523,17 +523,30 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                         return;
                     }
                     try {
-                        let buffer = avatarCache.get(key);
-                        if (!buffer) {
-                            buffer = fs.readFileSync(path.join(AVATAR_DIR, AVATAR_ASSETS[key]));
-                            avatarCache.set(key, buffer);
+                        // 每次按 mtime 判定：素材被替换后无需重启进程即生效；
+                        // 命中 if-modified-since 时回 304，避免每次加载重传整帧。
+                        const file = path.join(AVATAR_DIR, AVATAR_ASSETS[key]);
+                        const stat = fs.statSync(file);
+                        const mtimeMs = Math.floor(stat.mtimeMs / 1000) * 1000;
+                        let entry = avatarCache.get(key);
+                        if (!entry || entry.mtimeMs !== mtimeMs) {
+                            entry = { mtimeMs, buffer: fs.readFileSync(file) };
+                            avatarCache.set(key, entry);
+                        }
+                        const lastModified = new Date(mtimeMs).toUTCString();
+                        const since = Date.parse(req.headers["if-modified-since"] ?? "");
+                        if (Number.isFinite(since) && since >= mtimeMs) {
+                            res.writeHead(304, { "cache-control": "private, no-cache", "last-modified": lastModified });
+                            res.end();
+                            return;
                         }
                         res.writeHead(200, {
                             "content-type": "image/gif",
-                            "cache-control": "private, max-age=86400",
-                            "content-length": buffer.length,
+                            "cache-control": "private, no-cache",
+                            "last-modified": lastModified,
+                            "content-length": entry.buffer.length,
                         });
-                        res.end(buffer);
+                        res.end(entry.buffer);
                     } catch {
                         sendJson(res, 500, { ok: false, error: "LEPI_AVATAR_UNAVAILABLE" });
                     }

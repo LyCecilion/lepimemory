@@ -19,9 +19,9 @@ const CLIENT_FRAME_KEYS = [
     'question', 'shades', 'sleep', 'trash', 'type', 'type-annoyed', 'work', 'work-angry', 'work-tired',
 ];
 
-test('清单是 38 项且键名形状合法', () => {
+test('清单是 29 项且键名形状合法', () => {
     const keys = Object.keys(AVATAR_ASSETS);
-    assert.equal(keys.length, 38);
+    assert.equal(keys.length, 29);
     for (const key of keys) assert.match(key, KEY_RE, `非法 key：${key}`);
     assert.equal(new Set(keys).size, keys.length, '存在重复 key');
 });
@@ -32,12 +32,12 @@ test('assets/avatar/ 的文件集合与清单的值完全相等（无缺失、�
     assert.deepEqual(onDisk, declared);
 });
 
-test('每个素材都是 112x112 的 GIF89a', () => {
+test('每个素材都是 256x256 的 GIF89a', () => {
     for (const [key, file] of Object.entries(AVATAR_ASSETS)) {
         const buf = fs.readFileSync(path.join(AVATAR_DIR, file));
         assert.equal(buf.subarray(0, 6).toString('latin1'), 'GIF89a', `${key} 头部不是 GIF89a`);
-        assert.equal(buf.readUInt16LE(6), 112, `${key} 宽度不是 112`);
-        assert.equal(buf.readUInt16LE(8), 112, `${key} 高度不是 112`);
+        assert.equal(buf.readUInt16LE(6), 256, `${key} 宽度不是 256`);
+        assert.equal(buf.readUInt16LE(8), 256, `${key} 高度不是 256`);
     }
 });
 
