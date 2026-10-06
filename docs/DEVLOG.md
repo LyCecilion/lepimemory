@@ -57,36 +57,36 @@
 
 ### dsh 机制
 
-4. **stock bundle 没有 console exporter**：`ctx.logger.error` 在 web stdout 看不到。→ 审计改走自有持久化。
-5. **out-of-tree 不能追加自定义会话事件**：`Session.append` 写入成功，但读侧按静态白名单准入，重载整档直接拒绝；冷路径写句柄又被单写者挡住。→ 不加事件，审计自存；"状态生效了"用系统消息的 Prompt Diff 证明。
-6. **pre-step 每步都触发**：一次工具调用等于多步，天真实现会重复注入召回。→ 每 turn 只注入一次（只认真实用户输入）。
-7. **host 注册的工具会到达每个 agent**：工具注册表是"全局层 + per-scope 层"合并；`--dump-config` 里"有某行"不等于"会话能用它"，能力面由 preset 的 plugins 列表 + disabled 共同决定。
-8. **`tool/result` 的 `isError` / `toolCallId` 在 message 顶层**（会话格式 V4）：磁盘上的旧 V2 文件是另一种嵌套形状，差点照它实现。→ 按顶层读，核对一律用 v4 文件或源码类型。
-9. **工具结果只有 `output.render` 对模型可见**：候选 id 放进 `value` 模型拿不到，两段式工具第二段发不出来。→ 模型要用的字段必须写进 render。
-10. **`webServer` 在插件 apply 时可能未就绪**：`ctx.get('webServer')` 是即时读取，拿到 `undefined` 就静默 404。→ 用 `ctx.inject(['webServer'], …)` 延迟到服务可用再注册。
-11. **个人端点差点写进仓库草稿**：该 provider 的 baseURL 会回落官方端点，只填 key 时 key 会被发到错误的地方；配置补丁的 `disabled` 又不支持条件表达式。→ 仓库草稿保持注释掉的 opt-in，个人端点只放本机独立 patch 层。
+1. **stock bundle 没有 console exporter**：`ctx.logger.error` 在 web stdout 看不到。→ 审计改走自有持久化。
+2. **out-of-tree 不能追加自定义会话事件**：`Session.append` 写入成功，但读侧按静态白名单准入，重载整档直接拒绝；冷路径写句柄又被单写者挡住。→ 不加事件，审计自存；"状态生效了"用系统消息的 Prompt Diff 证明。
+3. **pre-step 每步都触发**：一次工具调用等于多步，天真实现会重复注入召回。→ 每 turn 只注入一次（只认真实用户输入）。
+4. **host 注册的工具会到达每个 agent**：工具注册表是"全局层 + per-scope 层"合并；`--dump-config` 里"有某行"不等于"会话能用它"，能力面由 preset 的 plugins 列表 + disabled 共同决定。
+5. **`tool/result` 的 `isError` / `toolCallId` 在 message 顶层**（会话格式 V4）：磁盘上的旧 V2 文件是另一种嵌套形状，差点照它实现。→ 按顶层读，核对一律用 v4 文件或源码类型。
+6. **工具结果只有 `output.render` 对模型可见**：候选 id 放进 `value` 模型拿不到，两段式工具第二段发不出来。→ 模型要用的字段必须写进 render。
+7. **`webServer` 在插件 apply 时可能未就绪**：`ctx.get('webServer')` 是即时读取，拿到 `undefined` 就静默 404。→ 用 `ctx.inject(['webServer'], …)` 延迟到服务可用再注册。
+8. **个人端点差点写进仓库草稿**：该 provider 的 baseURL 会回落官方端点，只填 key 时 key 会被发到错误的地方；配置补丁的 `disabled` 又不支持条件表达式。→ 仓库草稿保持注释掉的 opt-in，个人端点只放本机独立 patch 层。
 
 ### Hindsight（记忆服务）
 
-12. **retain 的 3 秒预算假报超时**：LLM 抽取比读慢得多，其实写成功了。→ 读 3s、写 30s 分开预算。
-13. **retain 非幂等，不能重试**：网络错误后重试等于写两条重复记忆。→ 写路径 `maxRetries: 0`；只有幂等读才退避重试。
+1. **retain 的 3 秒预算假报超时**：LLM 抽取比读慢得多，其实写成功了。→ 读 3s、写 30s 分开预算。
+2. **retain 非幂等，不能重试**：网络错误后重试等于写两条重复记忆。→ 写路径 `maxRetries: 0`；只有幂等读才退避重试。
 
 ### 意图与判断
 
-14. **过度写入**："我下周要见谁来着？"这类疑问句被存成事实，召回候选膨胀出近重复。→ 按长度/疑问/请求/寒暄排除 + 去重。
-15. **正则识别意图会误判**："我永远不会忘记你"被当成遗忘请求，"嗯……对了"被当成确认，可能误删。→ 改为注册工具让模型调用 + 原生审批卡，两类误判从根上消失。顺带踩了两个 schema 坑：`output.schema` 的 `required` 必须是对象级数组；`parameters` 必须显式 object 节点，裸属性表会被判 `type: null`。
+1. **过度写入**："我下周要见谁来着？"这类疑问句被存成事实，召回候选膨胀出近重复。→ 按长度/疑问/请求/寒暄排除 + 去重。
+2. **正则识别意图会误判**："我永远不会忘记你"被当成遗忘请求，"嗯……对了"被当成确认，可能误删。→ 改为注册工具让模型调用 + 原生审批卡，两类误判从根上消失。顺带踩了两个 schema 坑：`output.schema` 的 `required` 必须是对象级数组；`parameters` 必须显式 object 节点，裸属性表会被判 `type: null`。
 
 ### 验证环境
 
-16. **headless 环境不干净**：没有 preset registry，编码向工具还在，模型自己 `curl` 直连记忆服务绕过注入，"模型提到了记忆"不算证据。→ 干净验证一律用 web profile + 结构性判据（读日志/文件/wire）。
-17. **浏览器自动化脆弱**：欢迎弹窗挡点击、ARIA 引用每次快照重编号。→ 用 `page.evaluate` + 键盘操作；跨会话冒烟是加分项，别在上面耗轮次。
+1. **headless 环境不干净**：没有 preset registry，编码向工具还在，模型自己 `curl` 直连记忆服务绕过注入，"模型提到了记忆"不算证据。→ 干净验证一律用 web profile + 结构性判据（读日志/文件/wire）。
+2. **浏览器自动化脆弱**：欢迎弹窗挡点击、ARIA 引用每次快照重编号。→ 用 `page.evaluate` + 键盘操作；跨会话冒烟是加分项，别在上面耗轮次。
 
 ### 上下文与记忆更新
 
-18. **preset 挂压缩服务必须放进 isolate realm**：直接列进 plugins 会被 preset registry 拒绝。→ 照上游 standard preset 用 `cordis:group` + `isolate` 包住。
-19. **Hindsight 抽取按"用户视角"读第一人称**：角色写"我猜她压力大"被重写成"用户猜测她压力大"。→ 让角色用第三人称成句（"蝶忆觉得…"），抽取就忠实了。
-20. **observation 会丢 metadata、但继承 tags**：不能依赖 metadata 传信任档。→ 语义上按当前版本的事实处理，信任档只对原始推断生效。
-21. **`prefer_observations` 在遗忘取候选时必须关掉**：否则看不到被综合观察覆盖的原始事实，抑制不完整。→ 读路径开启，遗忘内部召回关闭。
+1. **preset 挂压缩服务必须放进 isolate realm**：直接列进 plugins 会被 preset registry 拒绝。→ 照上游 standard preset 用 `cordis:group` + `isolate` 包住。
+2. **Hindsight 抽取按"用户视角"读第一人称**：角色写"我猜她压力大"被重写成"用户猜测她压力大"。→ 让角色用第三人称成句（"蝶忆觉得…"），抽取就忠实了。
+3. **observation 会丢 metadata、但继承 tags**：不能依赖 metadata 传信任档。→ 语义上按当前版本的事实处理，信任档只对原始推断生效。
+4. **`prefer_observations` 在遗忘取候选时必须关掉**：否则看不到被综合观察覆盖的原始事实，抑制不完整。→ 读路径开启，遗忘内部召回关闭。
 
 ---
 
