@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
   id: '@dsh-external/dsh-lepimemory-state',
   factory(require) {
     const React = require('react')
+    const ReactDOM = require('react-dom')
 
     const NS = 'lepimemoryState'
     const PAGE = 10
@@ -37,6 +38,65 @@ window.__ModuleLoader__.load({
       ['control', 'tab_control'],
       ['consent', 'tab_consent'],
     ]
+
+    /**
+     * 立绘差分候选表：活动 → 基调 → 候选 key（按序取第一个加载成功者）。
+     * idle 另有 `near`（关系亲近）候选组。所有 key 必须存在于 host 的 AVATAR_ASSETS 清单。
+     */
+    const AVATAR_FRAMES = {
+      idle: { bright: ['celebrate', 'cheers'], plain: ['work', 'daze'], low: ['daze', 'sleep'], near: ['greet', 'nosetouch'] },
+      think: { bright: ['idea', 'cheer'], plain: ['idea', 'loading', 'question'], low: ['clueless', 'question'] },
+      speak: { bright: ['megaphone', 'bubble'], plain: ['type', 'megaphone'], low: ['type-annoyed', 'type'] },
+      tool: { bright: ['shades', 'knock'], plain: ['work', 'shades', 'type'], low: ['work-tired', 'work-angry'] },
+      approval: { bright: ['press', 'bell'], plain: ['question', 'button', 'bell'], low: ['jailed', 'trash'] },
+      question: { bright: ['press', 'question'], plain: ['question', 'button'], low: ['clueless', 'question'] },
+      error: { bright: ['clown', 'dead'], plain: ['angry', 'dead'], low: ['cry', 'trash'] },
+    }
+    /** 活动 → 候选 key 列表；idle 且关系亲近时，把近亲候选置顶。 */
+    function avatarCandidates(activity, tone, near) {
+      const table = AVATAR_FRAMES[activity] || AVATAR_FRAMES.idle
+      const toneList = table[tone] || table.plain
+      return activity === 'idle' && near === true ? [...table.near, ...toneList] : toneList
+    }
+    const AVATAR_PRELOAD_KEYS = Array.from(new Set(Object.values(AVATAR_FRAMES)
+      .flatMap((t) => Object.values(t)).flat()))
+    const avatarSrc = (k) => '/lepimemory/avatar?key=' + encodeURIComponent(k)
+
+    /**
+     * Chat 快照 → 'tool' | 'speak' | 'think' | null。工具（未出结果）优先于助手输出。
+     * 判据对齐 ui-chat ApprovalCommand：运行中的工具 root 不含 `kind`（即尚未 tool-result）；
+     * 助手流只在存在 running 的 assistant-step 时才算「在想/在说」。
+     */
+    function deriveChatSignal(snapshot) {
+      if (!snapshot || !snapshot.nodes) return null
+      let running = false, speaking = false
+      for (const node of snapshot.nodes.values()) {
+        if (node.kind === 'tool-call') {
+          const root = node.data && node.data.root
+          if (root && root.kind !== 'tool-result') return 'tool'
+        } else if (node.kind === 'assistant-step' && node.data && node.data.status === 'running') {
+          running = true
+          const blocks = node.data.blocks || []
+          if (blocks.some((b) => b.kind === 'text' && b.text && b.text.trim())) speaking = true
+        }
+      }
+      if (!running) return null
+      return speaking ? 'speak' : 'think'
+    }
+
+    /** (SessionStatus, chatSignal, lastAgentError) → 活动枚举。审批/提问优先于一切。 */
+    function resolveActivity(status, chatSignal, agentError) {
+      if (status && status.pendingInteraction) {
+        return status.pendingInteraction.kind === 'approval' ? 'approval' : 'question'
+      }
+      if (status && status.running === true) {
+        if (chatSignal === 'tool') return 'tool'
+        if (chatSignal === 'speak') return 'speak'
+        return 'think'
+      }
+      if (agentError) return 'error'
+      return 'idle'
+    }
 
     /**
      * 真实 store 状态 → 本地化文案 key。缺省显示原始状态串（绝不当作成功）。
@@ -144,6 +204,9 @@ window.__ModuleLoader__.load({
       '.lep-receipts__title { opacity: 0.75; }',
       '.lep-receipts ul { list-style: none; margin: 0; padding: 0; max-height: 88px; overflow: auto; }',
       '.lep-receipts li time { opacity: 0.6; margin-right: 6px; }',
+      '.lep-avatar { position: fixed; right: 14px; bottom: 14px; width: 128px; height: 128px; pointer-events: none; z-index: 35; }',
+      '.lep-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 240ms ease; }',
+      '.lep-avatar img.is-on { opacity: 1; }',
     ].join('\n')
 
     /** 状态 → 文案（legacy 记录加历史后缀；未知状态原样展示，绝不显示为成功）。 */
@@ -244,14 +307,46 @@ window.__ModuleLoader__.load({
       return out
     }
 
-    /** 面板组件：状态每 5s 刷新；历史面板可折叠、按 kind 切换、翻页；支持详情/重试/操作者编辑。 */
-    function Panel({ t }) {
+    /**
+     * 面板/立绘共享的 /lepimemory/state 轮询源（ObservableSnapshot 形状）。
+     * 首个订阅者出现时开始 5s 轮询，最后一个离开时停止；两处 UI 共用同一份快照。
+     */
+    function createStateFeed() {
+      const listeners = new Set()
+      let snap = { phase: 'loading', body: null }
+      let timer = null, ctrl = null, seq = 0
+      const emit = () => { for (const fn of listeners) fn() }
+      const load = () => {
+        const my = ++seq
+        if (ctrl) ctrl.abort()
+        ctrl = new AbortController()
+        fetchJson('/lepimemory/state', { signal: ctrl.signal })
+          .then((r) => {
+            if (my !== seq) return
+            if (r.status === 401 || r.status === 403) { snap = { phase: 'forbidden', body: null }; emit(); return }
+            if (!r.ok || r.body.ok === false) { snap = { phase: 'error', body: null }; emit(); return }
+            snap = { phase: 'ok', body: r.body }; emit()
+          })
+          .catch((err) => { if (my === seq && err.name !== 'AbortError') { snap = { phase: 'error', body: null }; emit() } })
+      }
+      return {
+        getSnapshot: () => snap,
+        refresh: load,
+        subscribe(fn) {
+          listeners.add(fn)
+          if (!timer) { load(); timer = setInterval(load, 5000) }
+          return () => { listeners.delete(fn); if (!listeners.size) { clearInterval(timer); timer = null } }
+        },
+      }
+    }
+
+    /** 面板组件：状态经共享 feed 刷新；历史面板可折叠、按 kind 切换、翻页；支持详情/重试/操作者编辑。 */
+    function Panel({ t, useLepState, refreshLepState }) {
       const [s, setS] = React.useState(null)
       const [open, setOpen] = React.useState(false)
       const [kind, setKind] = React.useState('audit')
       const [offset, setOffset] = React.useState(0)
       const [hist, setHist] = React.useState(null)
-      const [stateTick, setStateTick] = React.useState(0)
       const [histTick, setHistTick] = React.useState(0)
       const [expanded, setExpanded] = React.useState({})
       const [cand, setCand] = React.useState({})
@@ -304,27 +399,14 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      // 状态轮询：AbortController + 序号，dispose 中止；401/403 清空本地私有缓存。
+      // 状态来自共享 feed（与立绘同一份快照）；错误/未授权按旧语义映射，首次 loading 保持不可见。
+      const feed = useLepState((st) => st)
       React.useEffect(() => {
-        const ctrl = new AbortController()
-        let alive = true
-        let seq = 0
-        const load = () => {
-          const my = ++seq
-          const epoch = privateEpoch.current
-          fetchJson('/lepimemory/state', { signal: ctrl.signal })
-            .then((r) => {
-              if (!alive || my !== seq || epoch !== privateEpoch.current) return
-              if (r.status === 401 || r.status === 403) { clearPrivate(); return }
-              if (!r.ok || r.body.ok === false) { setS({ ok: false }); return }
-              setS(r.body)
-            })
-            .catch((err) => { if (alive && my === seq && epoch === privateEpoch.current && err.name !== 'AbortError') setS({ ok: false }) })
-        }
-        load()
-        const timer = setInterval(load, 5000)
-        return () => { alive = false; ctrl.abort(); clearInterval(timer) }
-      }, [stateTick])
+        if (feed.phase === 'forbidden') { clearPrivate(); return }
+        if (feed.phase === 'loading') return
+        if (feed.phase === 'ok') { setS(feed.body); return }
+        setS({ ok: false })
+      }, [feed])
 
       // 折叠时也读取最新审计回执；展开后按 kind/offset 分页，序号阻止陈旧响应。
       React.useEffect(() => {
@@ -525,7 +607,7 @@ window.__ModuleLoader__.load({
             if (!r.ok || r.body.ok === false) { setFormError(t('saveFailed')); return }
             const idKey = r.body.audit_id != null ? r.body.audit_id : r.body.id != null ? r.body.id : r.body.request_id
             addReceipt(idKey != null ? `audit:${idKey}` : `state:${Date.now()}`, Date.now(), `${t('opCauseFixed')} · ${fmtTime(r.body.updatedAt || Date.now())}`)
-            setStateTick((x) => x + 1)
+            if (refreshLepState) refreshLepState()
           })
           .catch(() => { if (mounted.current && epoch === privateEpoch.current) { setSaving(false); setFormError(t('saveFailed')) } })
       }
@@ -786,6 +868,61 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Lv3 立绘 overlay：portal 到 document.body，一帧只由 (activity, tone, near) 决定；
+     * 自身不产生可见 DOM、不发业务请求、没有独立时间轴。
+     */
+    function AvatarOverlay({ sessionId, useSessionStatus, useSession, useChat, useLepState, t }) {
+      const status = useSessionStatus((map) => (sessionId ? map.get(sessionId) : undefined))
+      const agentError = useSession((s) => (s ? s.lastAgentError : null))
+      const useChatSafe = typeof useChat === 'function' ? useChat : () => null
+      const chatSignal = useChatSafe((s) => deriveChatSignal(s))
+      const feed = useLepState((st) => st)
+
+      const activity = resolveActivity(status, chatSignal, agentError)
+      const body = feed.phase === 'ok' ? feed.body : null
+      const tone = body && body.tone ? body.tone : 'plain'
+      const near = !!(body && body.near === true)
+      const candidates = avatarCandidates(activity, tone, near)
+
+      const [idx, setIdx] = React.useState(0)
+      React.useEffect(() => { setIdx(0) }, [activity, tone, near])
+      const key = candidates[Math.min(idx, candidates.length - 1)]
+
+      // 双层交叉淡入：front 淡入、stash 留在底层淡出；240ms 后清掉底层。
+      const [view, setView] = React.useState({ front: key, stash: null, on: false })
+      React.useEffect(() => {
+        setView((prev) => (prev.front === key ? prev : { front: key, stash: prev.front, on: false }))
+      }, [key])
+      React.useEffect(() => {
+        if (!view.stash) return
+        const at = setTimeout(() => setView((prev) => (prev.stash ? { ...prev, stash: null } : prev)), 240)
+        return () => clearTimeout(at)
+      }, [view.stash])
+
+      // 挂载后一次性预热全部候选帧，首次切换不闪烁；同时按需给出一次降级告警。
+      React.useEffect(() => {
+        AVATAR_PRELOAD_KEYS.forEach((k) => { const img = new Image(); img.src = avatarSrc(k) })
+        if (typeof useChat !== 'function') console.warn('[lepimemory] useChat 不可用：立绘只按会话状态推导活动')
+      }, [])
+
+      const layer = (k, on, isTop) => React.createElement('img', {
+        key: k,
+        src: avatarSrc(k),
+        className: on ? 'is-on' : '',
+        alt: '',
+        onLoad: isTop ? () => setView((prev) => (prev.front === k ? { ...prev, on: true } : prev)) : undefined,
+        onError: isTop ? () => setIdx((i) => i + 1) : undefined,
+      })
+      const nodes = []
+      if (view.stash) nodes.push(layer(view.stash, true, false))
+      nodes.push(layer(view.front, view.on, true))
+      return ReactDOM.createPortal(
+        React.createElement('div', { className: 'lep-avatar', role: 'img', 'aria-label': t('avatarAlt') }, nodes),
+        document.body,
+      )
+    }
+
     const dicts = {
       zh: {
         unavailable: '状态不可用',
@@ -995,10 +1132,20 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, dicts), 'lepimemory-state: locale')
+        // 面板与立绘共享同一份 /lepimemory/state 轮询源；两条目各自独立注册
+        // （ctx.slots.inject 回调必须返回单个 disposer，不能聚合多个 register）。
+        const feed = createStateFeed()
+        const injectFeed = () => ({ hooks: { lepState: feed }, refreshLepState: () => feed.refresh() })
         ctx.slots.inject('conversation.input.dock', () =>
           ctx.slots.register(
-            { name: 'conversation.input.dock', id: 'lepimemory-state', order: 5, locale: NS },
+            { name: 'conversation.input.dock', id: 'lepimemory-state', order: 5, locale: NS, inject: injectFeed },
             Panel,
+          ),
+        )
+        ctx.slots.inject('conversation.input.dock', () =>
+          ctx.slots.register(
+            { name: 'conversation.input.dock', id: 'lepimemory-avatar', order: 6, locale: NS, inject: injectFeed },
+            AvatarOverlay,
           ),
         )
       },
