@@ -6,7 +6,7 @@ node_modules/
 /.runtime/
 
 # 实验 dump 快照（纪律：放 /tmp；此处兜底防误提交）
-docs/research/artifacts/*.yml
+docs/archive/artifacts/*.yml
 
 # 脱敏检查模式（含个人标识，绝不提交）
 .sanitize-patterns
