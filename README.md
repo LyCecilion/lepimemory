@@ -1,5 +1,11 @@
 <!-- Lepimemory — 极创工作室第二次面试题 -->
 
+<div align="center">
+
+截至目前，该项目完全使用 AI 生成。我们将会在近期 human review 该项目并重写文档。
+
+</div>
+
 # 蝶忆 Lepimemory
 
 > 一个会**记住过去、保持稳定人格、采取真实行动**的角色 Agent，而且它的每一步变化都可以查证。
@@ -53,16 +59,16 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 
 ## 仓库结构
 
-| 路径 | 说明 |
-| --- | --- |
-| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/src/runtime.ts`（生成 `scripts/dist/runtime.js`） | 固定运行时入口：`bootstrap` / `build` / `install-profile` / `dev` / `verify` / `check` |
-| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml` | 根工作区：锁定 Node/pnpm/dsh 版本与依赖（frozen install） |
-| `dsh/profiles/lepimemory/` | profile 源：人设 + 能力面裁剪 + 隔离 realm；由 launcher 复制生成到 `$DSH_HOME` |
-| `dsh/plugins/dsh-lepimemory-state/src/` | 自研角色运行时插件的手写源码（服务端 `src/*.ts`、共享 `src/shared/*.ts`、客户端 `src/client/**`）；`lib/`、`client.js` 是生成物 |
-| `deploy/hindsight/` · `deploy/laya/` | 两个记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型） |
-| `docker-compose.yml` | 记忆服务编排（仅 loopback 端口；复用既有数据/缓存卷） |
-| `docs/` | 机制导览、架构说明、开发日志 |
-| `.env.example` | 环境变量样例（凭据留空） |
+| 路径                                                                                                     | 说明                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/src/runtime.ts`（生成 `scripts/dist/runtime.js`） | 固定运行时入口：`bootstrap` / `build` / `install-profile` / `dev` / `verify` / `check`                                          |
+| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml`                                                | 根工作区：锁定 Node/pnpm/dsh 版本与依赖（frozen install）                                                                       |
+| `dsh/profiles/lepimemory/`                                                                               | profile 源：人设 + 能力面裁剪 + 隔离 realm；由 launcher 复制生成到 `$DSH_HOME`                                                  |
+| `dsh/plugins/dsh-lepimemory-state/src/`                                                                  | 自研角色运行时插件的手写源码（服务端 `src/*.ts`、共享 `src/shared/*.ts`、客户端 `src/client/**`）；`lib/`、`client.js` 是生成物 |
+| `deploy/hindsight/` · `deploy/laya/`                                                                     | 两个记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型）                                                               |
+| `docker-compose.yml`                                                                                     | 记忆服务编排（仅 loopback 端口；复用既有数据/缓存卷）                                                                           |
+| `docs/`                                                                                                  | 机制导览、架构说明、开发日志                                                                                                    |
+| `.env.example`                                                                                           | 环境变量样例（凭据留空）                                                                                                        |
 
 ## 文档地图
 
