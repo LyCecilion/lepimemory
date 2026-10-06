@@ -61,7 +61,7 @@ DSH_HOME=/tmp/lepimemory-home make dev              # 启动锁定 dsh（core �
 | --- | --- | --- |
 | `GET /lepimemory/health` | 公开只读 | launcher readiness（core / node / dsh / schema / service-ready bool） |
 | `GET` · `POST /lepimemory/state` | 操作者 | 有效状态（衰减视图）；数值调整经校验后固定原因、原子提交 + 审计 |
-| `GET /lepimemory/history?kind=&limit=&offset=` | 操作者 | 审计分页（封闭 kind 集合） |
+| `GET /lepimemory/history?kind=&limit=&offset=[&grouped=1]` | 操作者 | 审计分页（封闭 kind 集合）；`grouped=1` 按「主体」分组、以组为单位分页 |
 | `GET /lepimemory/candidate?id=&reveal=` | 操作者 | 已获准快照 / 生命周期 / 来源引用（无 heap 回退；`reveal=1` 仅审计原文） |
 | `POST /lepimemory/retry` | 操作者 | 按既有身份唤醒 request/task（不新开 operation） |
 

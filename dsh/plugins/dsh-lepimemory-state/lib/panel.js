@@ -13,7 +13,7 @@
  *   - `GET  /lepimemory/health`                          公开只读 bool（launcher readiness）
  *   - `GET  /lepimemory/state`                           操作者；有效状态（衰减视图，不落库）+ 状态元数据
  *   - `POST /lepimemory/state[?preview=1]`               操作者；精确数值字段 → 固定原因 → （preview=1 时只 dry-run 不落库）原子提交 + 完整审计
- *   - `GET  /lepimemory/history?kind=&limit=&offset=`    操作者；审计分页（真实 status + 摘要元数据）
+ *   - `GET  /lepimemory/history?kind=&limit=&offset=[&grouped=1]`  操作者；`grouped=1` 时按「主体」分组、以组为单位分页（审计分页仍是逐条）
  *   - `GET  /lepimemory/candidate?id=&reveal=`           操作者；已获准快照/生命周期/来源引用（无 heap 回退）
  *   - `POST /lepimemory/retry`                           操作者；按既有身份唤醒 request/task（不新开 operation）
  *   - `GET  /lepimemory/avatar?key=`                     操作者；提供 assets/avatar/ 下清单内的立绘 GIF
@@ -79,6 +79,18 @@ function summarize(row) {
     if (data.verdict) parts.push(`判定 ${data.verdict}`);
     if (data.reason_code) parts.push(`原因 ${data.reason_code}`);
     return `${parts.join(" · ")}${data.legacy ? "（历史记录）" : ""}`;
+}
+
+/** 审计行 → 面板 entry（`history` 与 `historyGroups` 两条路径共用同一投影）。 */
+function mapEntry(row) {
+    return {
+        id: row.id, at: row.at, type: row.type, status: row.status,
+        summary: summarize(row),
+        session_id: row.session_id ?? null, turn: row.turn ?? null, step: row.step ?? null,
+        call_id: row.call_id ?? null, request_id: row.request_id ?? null, task_id: row.task_id ?? null,
+        candidate_id: row.candidate_id ?? null, operation_id: row.operation_id ?? null,
+        data: isPlainObject(row.data) ? row.data : {},
+    };
 }
 
 function sendJson(res, status, body) {
@@ -369,18 +381,19 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                     const limit = parseIntParam(url.searchParams.get("limit"), DEFAULT_LIMIT, 1, MAX_LIMIT);
                     const offset = parseIntParam(url.searchParams.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
                     if (limit === null || offset === null) { sendJson(res, 400, { ok: false, error: "invalid_pagination" }); return; }
+                    const grouped = url.searchParams.get("grouped") === "1";
+                    if (grouped) {
+                        let page;
+                        try { page = store.historyGroups({ kind, limit, offset }); }
+                        catch { sendJson(res, 500, { ok: false, error: "LEPI_STORE_UNAVAILABLE" }); return; }
+                        const groups = page.groups.map((g) => ({ key: g.key, truncated: g.truncated, entries: g.items.map(mapEntry) }));
+                        sendJson(res, 200, { ok: true, kind, grouped: true, total: page.total, offset, limit, groups });
+                        return;
+                    }
                     let page;
                     try { page = store.history({ kind, limit, offset }); }
                     catch { sendJson(res, 500, { ok: false, error: "LEPI_STORE_UNAVAILABLE" }); return; }
-                    const entries = page.items.map((row) => ({
-                        id: row.id, at: row.at, type: row.type, status: row.status,
-                        summary: summarize(row),
-                        session_id: row.session_id ?? null, turn: row.turn ?? null, step: row.step ?? null,
-                        call_id: row.call_id ?? null, request_id: row.request_id ?? null, task_id: row.task_id ?? null,
-                        candidate_id: row.candidate_id ?? null, operation_id: row.operation_id ?? null,
-                        data: isPlainObject(row.data) ? row.data : {},
-                    }));
-                    sendJson(res, 200, { ok: true, kind, total: page.total, offset, limit, entries });
+                    sendJson(res, 200, { ok: true, kind, total: page.total, offset, limit, entries: page.items.map(mapEntry) });
                 },
             };
 

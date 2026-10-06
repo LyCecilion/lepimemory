@@ -90,6 +90,16 @@ CREATE TABLE audit (
 CREATE INDEX audit_kind ON audit(type,id DESC);
 `;
 
+/** 历史过滤的唯一口径：`history()` 与 `historyGroups()` 共用同一 where/args，避免两处漂移。 */
+function historyScope(kind) {
+    if (kind === 'audit') return { where: '', args: [] };
+    if (kind === 'task') return { where: 'WHERE type=? OR type LIKE ? OR task_id IS NOT NULL', args: [kind, `${kind}.%`] };
+    return { where: 'WHERE type=? OR type LIKE ?', args: [kind, `${kind}.%`] };
+}
+
+/** 分组键 SQL 片段：候选 > 任务 > 请求 > 单条（与既有客户端语义一致）。 */
+const GROUP_KEY_SQL = "CASE WHEN candidate_id IS NOT NULL THEN 'c:'||candidate_id WHEN task_id IS NOT NULL THEN 't:'||task_id WHEN request_id IS NOT NULL THEN 'r:'||request_id ELSE 'i:'||id END";
+
 export class StoreError extends Error {
     constructor(code = 'LEPI_STORE_UNAVAILABLE') {
         super(code);
@@ -207,12 +217,31 @@ export class Store {
 
     history({ kind = 'audit', limit = 10, offset = 0 } = {}) {
         if (!HISTORY_KINDS.has(kind) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) throw new StoreError();
-        const where = kind === 'audit' ? '' : kind === 'task' ? 'WHERE type=? OR type LIKE ? OR task_id IS NOT NULL' : 'WHERE type=? OR type LIKE ?';
-        const args = kind === 'audit' ? [] : [kind, `${kind}.%`];
+        const { where, args } = historyScope(kind);
         const total = this.db.prepare(`SELECT count(*) AS n FROM audit ${where}`).get(...args).n;
         const items = this.db.prepare(`SELECT * FROM audit ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, limit, offset)
             .map(row => ({ ...row, data: JSON.parse(row.data_json) }));
         return { kind, total, limit, offset, items };
+    }
+
+    /** 按「主体」分组的分页：以组为单位分页，组内阶段新→旧。 */
+    historyGroups({ kind = 'audit', limit = 10, offset = 0, stages = 50 } = {}) {
+        if (!HISTORY_KINDS.has(kind) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0
+            || !Number.isSafeInteger(stages) || stages < 1 || stages > 100) throw new StoreError();
+        const { where, args } = historyScope(kind);
+        const total = this.db.prepare(`SELECT count(DISTINCT ${GROUP_KEY_SQL}) AS n FROM audit ${where}`).get(...args).n;
+        const keys = this.db.prepare(`SELECT ${GROUP_KEY_SQL} AS gkey, MAX(id) AS latest FROM audit ${where} GROUP BY gkey ORDER BY latest DESC LIMIT ? OFFSET ?`)
+            .all(...args, limit, offset);
+        const stageStmt = this.db.prepare(`SELECT * FROM audit WHERE ${GROUP_KEY_SQL} = ? ORDER BY id DESC LIMIT ?`);
+        const groups = keys.map(({ gkey }) => {
+            const rows = stageStmt.all(gkey, stages + 1);
+            return {
+                key: gkey,
+                truncated: rows.length > stages,
+                items: rows.slice(0, stages).map(row => ({ ...row, data: JSON.parse(row.data_json) })),
+            };
+        });
+        return { kind, total, limit, offset, groups };
     }
 
     get policyEpoch() {

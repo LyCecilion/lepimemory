@@ -1,5 +1,5 @@
 /**
- * 浏览器半：`conversation.input.dock` 上的角色状态面板。
+ * 浏览器半：右侧栏标签页的状态面板（立绘 overlay 仍在 `conversation.input.dock`）。
  *
  * 读宿主路由（共享契约）：
  *   - `GET  /lepimemory/state`                        当前状态（renderState + 数值 + core/status/counts 元数据），每 5s 刷新
@@ -23,9 +23,23 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const ReactDOM = require('react-dom')
+    // dsh 平台 seed 里的组件库（Button/Pill/Tag/Checkbox/StateDot + 图标）：
+    // 面板直接用真组件，样式与全局一致，不再手搓按钮/徽章。
+    const UI = require('@deepseek-ai/dsh-client-ui-primitives')
+    const { Button, Checkbox, Pill, StateDot, Tag } = UI
+    // 图标在 seed 里以 `<Name>Regular` / `<Name>Medium` 形式导出（无裸名）。
+    const IconArchiveOutline = UI.IconArchiveOutlineRegular
+    const IconCheckCircleOutline = UI.IconCheckCircleOutlineRegular
+    const IconChevronDownOutline = UI.IconChevronDownOutlineRegular
+    const IconChevronRightOutline = UI.IconChevronRightOutlineRegular
+    const IconDatabaseOutline = UI.IconDatabaseOutlineRegular
+    const IconEditOutline = UI.IconEditOutlineRegular
 
     const NS = 'lepimemoryState'
     const PAGE = 10
+    // 右侧栏标签页：`id` 是本实现在 tab 系统的唯一身份，也是正文槽注册的 key。
+    const PANEL_TAB_ID = '@dsh-external/dsh-lepimemory-state/panel'
+    const PANEL_KIND = 'lepimemoryState'
 
     /** 前五个既有标签 + task/control/consent 三个可达标签。 */
     const KINDS = [
@@ -153,22 +167,11 @@ window.__ModuleLoader__.load({
       if (!text) return null
       return text.length > 60 ? text.slice(0, 60) + '…' : text
     }
-    /** 同一条记忆/任务的生命周期归一组：候选优先，其次任务/请求，再次单条。 */
-    function historyGroupKey(e) {
-      if (e.candidate_id) return `c:${e.candidate_id}`
-      if (e.task_id) return `t:${e.task_id}`
-      if (e.request_id) return `r:${e.request_id}`
-      return `i:${e.id}`
-    }
-    /** 把（新→旧排序的）entries 折叠成组：组内保持新→旧，组序按各组最新一条。 */
-    function groupHistory(entries) {
-      const map = new Map()
-      for (const e of entries || []) {
-        const k = historyGroupKey(e)
-        const g = map.get(k)
-        if (g) g.push(e); else map.set(k, [e])
-      }
-      return [...map.values()]
+    /** 分组响应与 flat 响应统一取出条目集合（供回执汇聚/候选加载复用）。 */
+    function entriesOf(hist) {
+      if (!hist || hist.ok !== true) return []
+      if (Array.isArray(hist.groups)) return hist.groups.flatMap((g) => g.entries)
+      return Array.isArray(hist.entries) ? hist.entries : []
     }
 
     /** 活动 → 状态条色配（复用现有徽章色）。 */
@@ -217,6 +220,24 @@ window.__ModuleLoader__.load({
           React.createElement('span', { className: 'lep-meter__base lep-slider__tick', style: { left: basePct + '%' }, title: baselineLabel }),
         ),
         React.createElement('span', { className: 'lep-field__value' }, number ? value.toFixed(2) : '—'),
+      )
+    }
+
+    /** 分节标题：chevron + 图标 + 标题，点击展开/收起（对齐 dsh 的 disclosure 形）。 */
+    function SectionHead({ icon: Icon, title, open, onToggle }) {
+      return React.createElement(
+        'div',
+        {
+          className: 'lep-sechead' + (open ? ' is-open' : ''),
+          role: 'button',
+          tabIndex: 0,
+          onClick: onToggle,
+          onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } },
+        },
+        React.createElement('span', { className: 'lep-sechead__chev' },
+          React.createElement(open ? IconChevronDownOutline : IconChevronRightOutline, { size: 14 })),
+        Icon ? React.createElement('span', { className: 'lep-sechead__icon' }, React.createElement(Icon, { size: 15 })) : null,
+        React.createElement('span', { className: 'lep-sechead__title' }, title),
       )
     }
 
@@ -285,94 +306,86 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = [
-      '.lep-state { margin: 0 auto 6px; max-width: 800px; padding: 6px 12px; font-size: 12px;',
-      '  line-height: 1.5; white-space: pre-wrap; color: var(--dsw-alias-text-secondary, #8a8f98);',
-      '  background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.06));',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.2)); border-radius: 8px; }',
-      '.lep-hist { margin-top: 6px; border-top: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.2)); padding-top: 4px; }',
-      '.lep-hist__head { cursor: pointer; user-select: none; }',
-      '.lep-hist__tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }',
-      '.lep-tab { font: inherit; font-size: 11px; padding: 1px 6px; border-radius: 6px; cursor: pointer;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.25)); background: transparent;',
-      '  color: var(--dsw-alias-text-secondary, #8a8f98); }',
-      '.lep-tab--on { background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.15)); color: inherit; }',
-      '.lep-hist__list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; }',
-      '.lep-row { padding: 2px 0; white-space: normal; }',
-      '.lep-toolbar { margin-top: 4px; display: flex; gap: 10px; align-items: center; }',
-      '.lep-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; opacity: 0.8; }',
-      '.lep-intent { margin-right: 6px; opacity: 0.85; }',
-      '.lep-excerpt { margin-left: 6px; opacity: 0.7; }',
+      // 面板整体：融进侧栏表面（不另起卡片），占满可用高度并作为**唯一**滚动区。
+      '.lep-state { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; overflow-y: auto;',
+      '  margin: 0; padding: 8px 12px 16px; font: var(--dsw-font-xs-13);',
+      '  color: var(--dsw-alias-label-secondary); background: transparent; }',
+      // 分节：细线分隔；首个分节不加线。标题走 dsh disclosure 形（chevron + 图标 + 标题）。
+      '.lep-section { margin-top: 12px; border-top: 0.5px solid var(--dsw-alias-border-l2); padding-top: 10px; }',
+      '.lep-section:first-child { margin-top: 0; border-top: none; padding-top: 0; }',
+      '.lep-sechead { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;',
+      '  color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-strong-13); }',
+      '.lep-sechead:hover .lep-sechead__title { color: var(--dsw-alias-link); }',
+      '.lep-sechead.is-static { cursor: default; }',
+      '.lep-sechead__chev, .lep-sechead__icon { display: inline-flex; color: var(--dsw-alias-label-tertiary); }',
+      // 状态条：meter + 活动 Tag（含 StateDot）+ 摘要。
+      '.lep-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }',
+      '.lep-strip__group { display: inline-flex; align-items: center; gap: 8px; }',
+      '.lep-strip__grouplabel { color: var(--dsw-alias-label-tertiary); }',
+      '.lep-strip__summary { flex-basis: 100%; white-space: normal; color: var(--dsw-alias-label-secondary); }',
+      '.lep-act { gap: 5px; }',
+      '.lep-act__dot { display: inline-flex; }',
+      '.lep-meter { display: inline-flex; align-items: center; gap: 6px; }',
+      '.lep-meter__label { color: var(--dsw-alias-label-secondary); }',
+      '.lep-meter__track { position: relative; display: inline-block; width: 52px; height: 6px; border-radius: var(--dsw-radius-xs);',
+      '  background: var(--dsw-alias-border-l3); vertical-align: middle; }',
+      '.lep-meter__fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: var(--dsw-radius-xs);',
+      '  background: var(--dsw-alias-state-business-primary); }',
+      '.lep-meter__base { position: absolute; top: -2px; bottom: -2px; width: 1px;',
+      '  background: var(--dsw-alias-label-primary); opacity: 0.45; }',
+      '.lep-meter__value { color: var(--dsw-alias-label-tertiary); min-width: 30px; }',
+      '.lep-badges { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }',
+      '.lep-toolbar { margin-top: 10px; display: flex; gap: 10px; align-items: center; }',
+      // 历史：筛选 Pill 行 + 行列表（行内元素 flex 对齐；细节/阶段各自独占整行）。
+      '.lep-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }',
+      '.lep-hist__list { list-style: none; margin: 0; padding: 0; }',
+      '.lep-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 5px 6px;',
+      '  border-radius: var(--dsw-radius-sm); white-space: normal; }',
+      '.lep-row:hover { background: var(--dsw-alias-interactive-bg-hover); }',
+      '.lep-row time { color: var(--dsw-alias-label-tertiary); }',
+      '.lep-intent { color: var(--dsw-alias-label-primary); }',
+      '.lep-excerpt { color: var(--dsw-alias-label-secondary); }',
       '.lep-excerpt::before { content: "「"; }',
       '.lep-excerpt::after { content: "」"; }',
-      '.lep-rawsum { margin-left: 6px; opacity: 0.6; font-family: monospace; }',
-      '.lep-stages { margin-left: 6px; opacity: 0.6; }',
-      '.lep-count { margin-left: 6px; opacity: 0.5; }',
-      '.lep-row--stage { padding-left: 12px; opacity: 0.85; }',
-      '.lep-stages__list { list-style: none; margin: 2px 0 0; padding: 0; }',
-      '.lep-row time { opacity: 0.6; margin-right: 6px; }',
-      '.lep-hist__empty { opacity: 0.6; }',
-      '.lep-hist__nav { display: flex; align-items: center; gap: 8px; margin-top: 4px; }',
-      '.lep-btn { font: inherit; font-size: 11px; padding: 1px 8px; border-radius: 6px; cursor: pointer;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.25)); background: transparent; color: inherit; }',
-      '.lep-btn:disabled { opacity: 0.4; cursor: default; }',
-      '.lep-btn--mini { margin-left: 6px; padding: 0 6px; font-size: 10px; }',
-      '.lep-badge { display: inline-block; font-size: 10px; padding: 0 5px; margin-right: 6px; border-radius: 5px;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); }',
-      '.lep-badge--ok { color: #2e7d32; border-color: #2e7d32; }',
-      '.lep-badge--warn { color: #a06a00; border-color: #a06a00; }',
-      '.lep-badge--err { color: #c62828; border-color: #c62828; }',
-      '.lep-badge--muted { opacity: 0.7; }',
-      '.lep-detail { margin: 2px 0 6px 12px; padding: 4px 8px; white-space: normal;',
-      '  border-left: 2px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); }',
-      '.lep-kv { display: flex; gap: 6px; white-space: normal; }',
-      '.lep-kv b { font-weight: 600; opacity: 0.8; min-width: 72px; }',
+      '.lep-rawsum { color: var(--dsw-alias-label-tertiary); font-family: var(--dsw-font-markdown-code-font-family); }',
+      '.lep-stages { color: var(--dsw-alias-label-tertiary); }',
+      '.lep-row--stage { padding-left: 16px; }',
+      '.lep-row--stage:hover { background: transparent; }',
+      '.lep-stages__list { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0; }',
+      '.lep-detail { flex-basis: 100%; margin: 2px 0 6px; padding: 6px 10px; white-space: normal; border-radius: var(--dsw-radius-sm);',
+      '  background: var(--dsw-alias-bg-layer-1); border-left: 2px solid var(--dsw-alias-border-l3); }',
+      '.lep-rowbtn { height: 20px; padding: 0 8px; font: var(--dsw-font-xxxs-11); }',
+      '.lep-hist__empty { color: var(--dsw-alias-label-tertiary); }',
+      '.lep-hist__nav { display: flex; align-items: center; gap: 8px; margin-top: 10px; }',
+      '.lep-pageinfo { color: var(--dsw-alias-label-tertiary); }',
+      // 详情：键值 / 快照 / 表单。
+      '.lep-kv { display: flex; gap: 8px; white-space: normal; }',
+      '.lep-kv b { font-weight: 500; color: var(--dsw-alias-label-tertiary); min-width: 72px; }',
       '.lep-sublist { list-style: none; margin: 0; padding: 0; }',
       '.lep-sublist li { white-space: normal; }',
-      '.lep-snap-text { margin: 2px 0; padding: 4px 6px; white-space: pre-wrap; word-break: break-word;',
-      '  background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.08)); border-radius: 6px; }',
-      '.lep-form { margin: 2px 0 4px; }',
-      '.lep-field { display: inline-flex; align-items: center; gap: 4px; margin: 2px 10px 2px 0; }',
-      '.lep-field--slider { gap: 6px; }',
-      '.lep-field__label { opacity: 0.8; }',
-      '.lep-field__value { opacity: 0.7; min-width: 30px; }',
+      '.lep-snap-text { margin: 4px 0; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; color: var(--dsw-alias-label-primary);',
+      '  background: var(--dsw-alias-bg-layer-2); border-radius: var(--dsw-radius-sm); }',
+      '.lep-form { margin: 4px 0 6px; }',
+      '.lep-field { display: inline-flex; align-items: center; gap: 6px; margin: 4px 12px 4px 0; }',
+      '.lep-field--slider { gap: 8px; }',
+      '.lep-field__label { color: var(--dsw-alias-label-secondary); }',
+      '.lep-field__value { color: var(--dsw-alias-label-tertiary); min-width: 30px; }',
       '.lep-slider { position: relative; display: inline-flex; align-items: center; }',
       '.lep-slider input[type=range] { width: 96px; margin: 0; }',
       '.lep-slider__tick { top: auto; bottom: -3px; height: 6px; }',
-      '.lep-preview { margin-top: 4px; }',
-      '.lep-preview__title { opacity: 0.75; }',
-      '.lep-form__actions { display: flex; align-items: center; gap: 8px; margin-top: 3px; }',
-      '.lep-note { opacity: 0.65; }',
-      '.lep-err { color: #c62828; margin-top: 3px; white-space: normal; }',
-      '.lep-receipts { margin: 3px 0; }',
-      '.lep-receipts__title { opacity: 0.75; }',
-      '.lep-receipts ul { list-style: none; margin: 0; padding: 0; max-height: 88px; overflow: auto; }',
-      '.lep-receipts li time { opacity: 0.6; margin-right: 6px; }',
+      '.lep-preview { margin-top: 6px; }',
+      '.lep-preview__title { color: var(--dsw-alias-label-secondary); }',
+      '.lep-form__actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }',
+      '.lep-note { color: var(--dsw-alias-label-tertiary); }',
+      '.lep-err { color: var(--dsw-alias-state-error-primary); margin-top: 4px; white-space: normal; }',
+      '.lep-receipts { list-style: none; margin: 4px 0 0; padding: 0; }',
+      '.lep-receipts li { color: var(--dsw-alias-label-secondary); }',
+      '.lep-receipts li time { color: var(--dsw-alias-label-tertiary); margin-right: 6px; }',
+      '.lep-raw__body { white-space: pre-wrap; margin-top: 6px; color: var(--dsw-alias-label-primary); font-family: var(--dsw-font-markdown-code-font-family); }',
+      // 立绘 overlay（仍挂在 dock，position: fixed 到视口）。
       '.lep-avatar { position: fixed; right: 14px; bottom: 14px; width: 128px; height: 128px; pointer-events: none; z-index: 35; }',
       '.lep-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 240ms ease; }',
       '.lep-avatar img.is-on { opacity: 1; }',
-      '.lep-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }',
-      '.lep-strip__group { display: inline-flex; align-items: center; gap: 8px; }',
-      '.lep-strip__grouplabel { opacity: 0.65; }',
-      '.lep-strip__summary { flex-basis: 100%; white-space: normal; opacity: 0.85; }',
-      '.lep-meter { display: inline-flex; align-items: center; gap: 4px; }',
-      '.lep-meter__label { opacity: 0.8; }',
-      '.lep-meter__track { position: relative; display: inline-block; width: 52px; height: 6px; border-radius: 3px;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); vertical-align: middle; }',
-      '.lep-meter__fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;',
-      '  background: var(--dsw-alias-text-secondary, #8a8f98); }',
-      '.lep-meter__base { position: absolute; top: -1px; bottom: -1px; width: 1px; opacity: 0.6;',
-      '  background: var(--dsw-alias-text-secondary, #8a8f98); }',
-      '.lep-meter__value { opacity: 0.7; min-width: 30px; }',
-      '.lep-badges { margin-top: 4px; }',
-      '.lep-act { font-size: 11px; padding: 0 6px; border-radius: 5px;',
-      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); }',
-      '.lep-act--ok { color: #2e7d32; border-color: #2e7d32; }',
-      '.lep-act--warn { color: #a06a00; border-color: #a06a00; }',
-      '.lep-act--err { color: #c62828; border-color: #c62828; }',
-      '.lep-act--muted { opacity: 0.7; }',
-      '.lep-raw { margin-top: 4px; white-space: normal; }',
-      '.lep-raw summary { cursor: pointer; user-select: none; opacity: 0.75; }',
-      '.lep-raw__body { white-space: pre-wrap; margin-top: 2px; }',
     ].join('\n')
 
     /** 状态 → 文案（legacy 记录加历史后缀；未知状态原样展示，绝不显示为成功）。 */
@@ -390,6 +403,17 @@ window.__ModuleLoader__.load({
       if (PENDING_STATUS.has(status)) return 'warn'
       if (ERR_STATUS.has(status)) return 'err'
       return 'muted'
+    }
+
+    /** 状态配色类 → dsh `Tag` 的 tone。 */
+    const TONE_OF = { ok: 'success', warn: 'warning', err: 'danger', muted: 'quiet' }
+    const toneOf = (cls) => TONE_OF[cls] || 'neutral'
+
+    /** 活动 → dsh `StateDot` 的状态。 */
+    function activityDot(activity) {
+      if (activity === 'error') return 'error'
+      if (activity === 'idle') return 'idle'
+      return 'ongoing'
     }
 
     /** 详情行（标签 + 文本值）。 */
@@ -518,6 +542,7 @@ window.__ModuleLoader__.load({
       const [expanded, setExpanded] = React.useState({})
       const [cand, setCand] = React.useState({})
       const [editorOpen, setEditorOpen] = React.useState(false)
+      const [rawOpen, setRawOpen] = React.useState(false)
       const [form, setForm] = React.useState(null)
       const [formError, setFormError] = React.useState('')
       const [saving, setSaving] = React.useState(false)
@@ -585,6 +610,7 @@ window.__ModuleLoader__.load({
       }, [feed])
 
       // 折叠时也读取最新审计回执；展开后按 kind/offset 分页，序号阻止陈旧响应。
+      // 默认走 host 分组（以组为单位分页）；debug 走 flat 逐条审计。
       React.useEffect(() => {
         setHist(null)
         const selectedKind = open ? kind : 'audit'
@@ -592,7 +618,7 @@ window.__ModuleLoader__.load({
         const ctrl = new AbortController()
         let alive = true
         let seq = 0
-        const url = `/lepimemory/history?kind=${encodeURIComponent(selectedKind)}&limit=${PAGE}&offset=${selectedOffset}`
+        const url = `/lepimemory/history?kind=${encodeURIComponent(selectedKind)}&limit=${PAGE}&offset=${selectedOffset}${debug ? '' : '&grouped=1'}`
         const load = () => {
           const my = ++seq
           const epoch = privateEpoch.current
@@ -602,14 +628,17 @@ window.__ModuleLoader__.load({
               if (r.status === 401 || r.status === 403) { clearPrivate(); return }
               if (!r.ok || r.body.ok === false) { setHist({ ok: false }); return }
               const body = r.body
+              const groups = Array.isArray(body.groups) ? body.groups : null
               const entries = Array.isArray(body.entries) ? body.entries : []
               setHist({
                 ok: true,
                 kind: body.kind || selectedKind,
-                total: typeof body.total === 'number' ? body.total : entries.length,
+                grouped: !!groups,
+                total: typeof body.total === 'number' ? body.total : (groups ? groups.length : entries.length),
                 offset: typeof body.offset === 'number' ? body.offset : selectedOffset,
                 limit: typeof body.limit === 'number' ? body.limit : PAGE,
                 entries,
+                groups,
               })
             })
             .catch((err) => { if (alive && my === seq && epoch === privateEpoch.current && err.name !== 'AbortError') setHist({ ok: false }) })
@@ -617,13 +646,13 @@ window.__ModuleLoader__.load({
         load()
         const timer = setInterval(load, 5000)
         return () => { alive = false; ctrl.abort(); clearInterval(timer) }
-      }, [open, kind, offset, histTick])
+      }, [open, kind, offset, histTick, debug])
 
       // 从历史记录汇聚系统回执：按 audit/request/task ID 去重（不触发任何模型调用）。
       React.useEffect(() => {
         if (!hist || hist.ok !== true) return
         let changed = false
-        for (const e of hist.entries || []) {
+        for (const e of entriesOf(hist)) {
           const type = e.type
           if (type !== 'control' && type !== 'consent' && type !== 'task' && type !== 'retain' && type !== 'forget' && type !== 'action') continue
           const key = e.task_id ? `task:${e.task_id}` : e.request_id ? `request:${e.request_id}` : `audit:${e.id}`
@@ -644,7 +673,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         const visible = new Set()
         if (open && hist && hist.ok === true) {
-          for (const e of hist.entries || []) {
+          for (const e of entriesOf(hist)) {
             if (e.candidate_id) visible.add(e.candidate_id) // 行内正文摘要（默认视图）
             if (expanded[`e${e.id}`]) for (const chain of e.data?.chains || []) {
               for (const source of chain.sources || []) {
@@ -842,10 +871,10 @@ window.__ModuleLoader__.load({
             : React.createElement(
                 'div',
                 null,
-                React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => loadCandidate(id, true) }, t('reveal')),
+                React.createElement(Button, { variant: 'ghost', size: 'sm', className: 'lep-rowbtn', onClick: () => loadCandidate(id, true) }, t('reveal')),
               ),
           c.revealed
-            ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => loadCandidate(id, false) }, t('revealHide'))
+            ? React.createElement(Button, { variant: 'ghost', size: 'sm', className: 'lep-rowbtn', onClick: () => loadCandidate(id, false) }, t('revealHide'))
             : null,
         )
         return React.createElement(
@@ -882,8 +911,8 @@ window.__ModuleLoader__.load({
                 kv(t('refCandidate'), source.candidate_id || '—'),
                 kv(t('refEvidence'), (source.evidence_ids || []).join(' · ') || '—'),
                 kv(t('refVerdict'), selected.has(source.raw_id) ? t('recallSelected') : excluded?.code || t('recallNotSelected')),
-                source.candidate_id ? React.createElement('button', {
-                  type: 'button', className: 'lep-btn lep-btn--mini',
+                source.candidate_id ? React.createElement(Button, {
+                  variant: 'ghost', size: 'sm', className: 'lep-rowbtn',
                   onClick: () => toggleEntry(candidateKey, { candidate_id: source.candidate_id }),
                 }, expanded[candidateKey] ? t('collapse') : t('detail')) : null,
                 source.candidate_id && expanded[candidateKey] ? renderCandidate(source.candidate_id) : null,
@@ -922,8 +951,8 @@ window.__ModuleLoader__.load({
           pushRef(t('refTruncated'), e.data.truncated)
         }
         const retryButtons = []
-        if (e.request_id) retryButtons.push(React.createElement('button', { key: 'rq', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`request:${e.request_id}`], onClick: () => doRetry('request', e.request_id) }, t('retryRequest')))
-        if (e.task_id) retryButtons.push(React.createElement('button', { key: 'tk', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`task:${e.task_id}`], onClick: () => doRetry('task', e.task_id) }, t('retryTask')))
+        if (e.request_id) retryButtons.push(React.createElement(Button, { key: 'rq', variant: 'outline', size: 'sm', className: 'lep-rowbtn', disabled: !!retrying[`request:${e.request_id}`], onClick: () => doRetry('request', e.request_id) }, t('retryRequest')))
+        if (e.task_id) retryButtons.push(React.createElement(Button, { key: 'tk', variant: 'outline', size: 'sm', className: 'lep-rowbtn', disabled: !!retrying[`task:${e.task_id}`], onClick: () => doRetry('task', e.task_id) }, t('retryTask')))
         return { refs, retryButtons, hasDetail: refs.length > 0 || !!e.candidate_id || retryButtons.length > 0 }
       }
       /** 一条 entry 的完整溯源块：来源引用 + 候选快照/生命周期 + 回忆来源链 + 重试。 */
@@ -942,11 +971,6 @@ window.__ModuleLoader__.load({
         const key = e.id != null ? `e${e.id}` : `${e.at}-${i}`
         const isOpen = !!expanded[key]
         const legacy = !!(e.data && e.data.legacy)
-        const badge = React.createElement(
-          'span',
-          { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` },
-          statusLabel(t, e.status, legacy),
-        )
         const built = buildRefs(e)
         const intent = INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')
         const excerpt = e.candidate_id ? excerptOf(cand[e.candidate_id]) : null
@@ -955,11 +979,11 @@ window.__ModuleLoader__.load({
           { key, className: 'lep-row' },
           React.createElement('time', null, fmtTime(e.at)),
           React.createElement('span', { className: 'lep-intent' }, intent),
-          badge,
+          React.createElement(Tag, { tone: toneOf(statusClass(e.status, legacy)) }, statusLabel(t, e.status, legacy)),
           excerpt ? React.createElement('span', { className: 'lep-excerpt' }, excerpt) : null,
           debug ? React.createElement('span', { className: 'lep-rawsum' }, e.summary || '') : null,
           built.hasDetail
-            ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
+            ? React.createElement(Button, { variant: 'ghost', size: 'sm', className: 'lep-rowbtn', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
             : null,
           isOpen ? detailBlock(e, built) : null,
         )
@@ -975,26 +999,21 @@ window.__ModuleLoader__.load({
           'li',
           { key, className: 'lep-row lep-row--stage' },
           React.createElement('time', null, fmtTime(e.at)),
-          React.createElement('span', { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` }, statusLabel(t, e.status, legacy)),
+          React.createElement(Tag, { tone: toneOf(statusClass(e.status, legacy)) }, statusLabel(t, e.status, legacy)),
           React.createElement('span', { className: 'lep-intent' }, INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')),
           built.hasDetail
-            ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
+            ? React.createElement(Button, { variant: 'ghost', size: 'sm', className: 'lep-rowbtn', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
             : null,
           isOpen ? detailBlock(e, built) : null,
         )
       }
 
-      /** 讲解优先：把同一条记忆/任务的生命周期折叠成一行，展开看每个阶段。 */
-      function renderGroup(entries) {
+      /** 讲解优先：host 已按主体分组，一行一组；展开看每个阶段（超限时提示截断）。 */
+      function renderGroup(entries, groupKey, truncated) {
         const head = entries[0]
-        const key = `grp:${historyGroupKey(head)}`
+        const key = `grp:${groupKey}`
         const isOpen = !!expanded[key]
         const legacy = !!(head.data && head.data.legacy)
-        const badge = React.createElement(
-          'span',
-          { className: `lep-badge lep-badge--${statusClass(head.status, legacy)}` },
-          statusLabel(t, head.status, legacy),
-        )
         const intent = INTENT_KEY[head.type] ? t(INTENT_KEY[head.type]) : (head.type || '')
         const excerpt = head.candidate_id ? excerptOf(cand[head.candidate_id]) : null
         const seq = []
@@ -1008,12 +1027,20 @@ window.__ModuleLoader__.load({
           { key, className: 'lep-row' },
           React.createElement('time', null, fmtTime(head.at)),
           React.createElement('span', { className: 'lep-intent' }, intent),
-          badge,
+          React.createElement(Tag, { tone: toneOf(statusClass(head.status, legacy)) }, statusLabel(t, head.status, legacy)),
           excerpt ? React.createElement('span', { className: 'lep-excerpt' }, excerpt) : null,
           collapsed ? React.createElement('span', { className: 'lep-stages' }, seq.join(' › ')) : null,
-          collapsed ? React.createElement('span', { className: 'lep-count' }, `×${entries.length}`) : null,
-          React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => setExpanded((prev) => ({ ...prev, [key]: !prev[key] })) }, isOpen ? t('collapse') : t('detail')),
-          isOpen ? React.createElement('ul', { className: 'lep-stages__list' }, entries.map((e, i) => renderStage(e, i))) : null,
+          collapsed ? React.createElement(Tag, { tone: 'quiet' }, `×${entries.length}`) : null,
+          React.createElement(Button, { variant: 'ghost', size: 'sm', className: 'lep-rowbtn', onClick: () => setExpanded((prev) => ({ ...prev, [key]: !prev[key] })) }, isOpen ? t('collapse') : t('detail')),
+          isOpen
+            ? React.createElement(
+                'ul',
+                { className: 'lep-stages__list' },
+                // 阶段按「旧→新」自上而下读，与组头的 `A › B › C` 链同向；被截断的最旧阶段在最上方。
+                truncated === true ? React.createElement('li', { key: 'truncated', className: 'lep-note' }, t('stagesTruncated')) : null,
+                [...entries].reverse().map((e, i) => renderStage(e, i)),
+              )
+            : null,
         )
       }
 
@@ -1025,13 +1052,10 @@ window.__ModuleLoader__.load({
       const total = hist && hist.ok === true ? hist.total : 0
       const pages = Math.max(1, Math.ceil(total / PAGE))
       const page = Math.floor(offset / PAGE) + 1
-
-      // 非 debug：同一记忆/任务的生命周期折叠成一行；debug：保留逐条审计行。
-      const listModel = hist && hist.ok === true
-        ? (debug
-            ? hist.entries.map((e) => ({ entries: null, e }))
-            : groupHistory(hist.entries).map((entries) => ({ entries, e: entries[0] })))
-        : []
+      // 切换 debug 后、effect 重取数前会先用**上一种**响应渲染：此刻 hist 仍是旧形状
+      // （flat 响应没有 groups，grouped 响应的 entries 为空数组）。两种形状都必须安全取用。
+      const groups = Array.isArray(hist && hist.groups) ? hist.groups : []
+      const entries = Array.isArray(hist && hist.entries) ? hist.entries : []
 
       const moodMeters = React.createElement(
         'span',
@@ -1057,7 +1081,12 @@ window.__ModuleLoader__.load({
         { className: 'lep-strip' },
         moodMeters,
         relationMeters,
-        React.createElement('span', { className: 'lep-act lep-act--' + activityClass }, t('act_' + activity)),
+        React.createElement(
+          Tag,
+          { tone: toneOf(activityClass), className: 'lep-act' },
+          React.createElement('span', { className: 'lep-act__dot' }, React.createElement(StateDot, { state: activityDot(activity), size: 8 })),
+          t('act_' + activity),
+        ),
         React.createElement('div', { className: 'lep-strip__summary' }, summary),
       )
 
@@ -1070,25 +1099,30 @@ window.__ModuleLoader__.load({
       const badgesBlock = React.createElement(
         'div',
         { className: 'lep-badges' },
-        badges.map(([label, n]) => React.createElement('span', { key: label, className: 'lep-badge' }, `${label} ${n}`)),
-        s.core === false ? React.createElement('span', { className: 'lep-badge lep-badge--err' }, t('badge_core_bad')) : null,
+        badges.map(([label, n]) => React.createElement(Tag, { key: label, tone: 'neutral' }, `${label} ${n}`)),
+        s.core === false ? React.createElement(Tag, { tone: 'danger' }, t('badge_core_bad')) : null,
       )
 
       const rawBlock = React.createElement(
-        'details',
-        { className: 'lep-raw' },
-        React.createElement('summary', null, t('stateRaw')),
-        React.createElement('div', { className: 'lep-raw__body' }, s.rendered),
+        'div',
+        { className: 'lep-section' },
+        React.createElement(SectionHead, { icon: IconDatabaseOutline, title: t('stateRaw'), open: rawOpen, onToggle: () => setRawOpen((v) => !v) }),
+        rawOpen ? React.createElement('div', { className: 'lep-raw__body' }, s.rendered) : null,
       )
 
       const receiptsBlock = receipts.length
         ? React.createElement(
             'div',
-            { className: 'lep-receipts' },
-            React.createElement('div', { className: 'lep-receipts__title' }, t('receipts')),
+            { className: 'lep-section' },
+            React.createElement(
+              'div',
+              { className: 'lep-sechead is-static' },
+              React.createElement('span', { className: 'lep-sechead__icon' }, React.createElement(IconCheckCircleOutline, { size: 15 })),
+              React.createElement('span', { className: 'lep-sechead__title' }, t('receipts')),
+            ),
             React.createElement(
               'ul',
-              null,
+              { className: 'lep-receipts' },
               receipts.map((r) => React.createElement('li', { key: r.key }, React.createElement('time', null, fmtTime(r.at)), r.text)),
             ),
           )
@@ -1101,34 +1135,24 @@ window.__ModuleLoader__.load({
             { className: 'lep-hist__body' },
             React.createElement(
               'div',
-              { className: 'lep-hist__tabs' },
+              { className: 'lep-tabs' },
               GROUPS.map((g) =>
-                React.createElement(
-                  'button',
-                  {
-                    key: g.id,
-                    type: 'button',
-                    className: 'lep-tab' + (g.id === group ? ' lep-tab--on' : ''),
-                    onClick: () => { setGroup(g.id); setKind(g.kinds[0]); setOffset(0) },
-                  },
-                  t(g.key),
-                ),
+                React.createElement(Pill, {
+                  key: g.id,
+                  active: g.id === group,
+                  onClick: () => { setGroup(g.id); setKind(g.kinds[0]); setOffset(0) },
+                }, t(g.key)),
               ),
             ),
             React.createElement(
               'div',
-              { className: 'lep-hist__tabs' },
+              { className: 'lep-tabs' },
               (GROUPS.find((g) => g.id === group) || GROUPS[0]).kinds.map((k) =>
-                React.createElement(
-                  'button',
-                  {
-                    key: k,
-                    type: 'button',
-                    className: 'lep-tab' + (k === kind ? ' lep-tab--on' : ''),
-                    onClick: () => { setKind(k); setOffset(0) },
-                  },
-                  t(KIND_LABEL.get(k) || k),
-                ),
+                React.createElement(Pill, {
+                  key: k,
+                  active: k === kind,
+                  onClick: () => { setKind(k); setOffset(0) },
+                }, t(KIND_LABEL.get(k) || k)),
               ),
             ),
             hist === null || hist.ok !== true
@@ -1136,15 +1160,21 @@ window.__ModuleLoader__.load({
               : React.createElement(
                   'div',
                   null,
-                  hist.entries.length === 0
+                  (debug ? entries.length === 0 : groups.length === 0)
                     ? React.createElement('div', { className: 'lep-hist__empty' }, t('empty'))
-                    : React.createElement('ul', { className: 'lep-hist__list' }, listModel.map((item, i) => (item.entries ? renderGroup(item.entries) : renderEntry(item.e, i)))),
+                    : React.createElement(
+                        'ul',
+                        { className: 'lep-hist__list' },
+                        debug
+                          ? entries.map((e, i) => renderEntry(e, i))
+                          : groups.map((g) => renderGroup(g.entries, g.key, g.truncated)),
+                      ),
                   React.createElement(
                     'div',
                     { className: 'lep-hist__nav' },
-                    React.createElement('button', { type: 'button', disabled: offset <= 0, onClick: () => setOffset(Math.max(0, offset - PAGE)) }, t('prev')),
-                    React.createElement('span', null, fill(t('pageOf'), { p: page, q: pages, n: total })),
-                    React.createElement('button', { type: 'button', disabled: offset + PAGE >= total, onClick: () => setOffset(offset + PAGE) }, t('next')),
+                    React.createElement(Button, { variant: 'outline', size: 'sm', disabled: offset <= 0, onClick: () => setOffset(Math.max(0, offset - PAGE)) }, t('prev')),
+                    React.createElement('span', { className: 'lep-pageinfo' }, fill(debug ? t('pageOf') : t('pageOfGroups'), { p: page, q: pages, n: total })),
+                    React.createElement(Button, { variant: 'outline', size: 'sm', disabled: offset + PAGE >= total, onClick: () => setOffset(offset + PAGE) }, t('next')),
                   ),
                 ),
           )
@@ -1167,8 +1197,8 @@ window.__ModuleLoader__.load({
 
       const editor = React.createElement(
         'div',
-        { className: 'lep-hist' },
-        React.createElement('div', { className: 'lep-hist__head', onClick: () => setEditorOpen(!editorOpen) }, `${editorOpen ? '▾' : '▸'} ${t('opTitle')}`),
+        { className: 'lep-section' },
+        React.createElement(SectionHead, { icon: IconEditOutline, title: t('opTitle'), open: editorOpen, onToggle: () => setEditorOpen(!editorOpen) }),
         editorOpen && form
           ? React.createElement(
               'form',
@@ -1182,7 +1212,7 @@ window.__ModuleLoader__.load({
               React.createElement(
                 'div',
                 { className: 'lep-form__actions' },
-                React.createElement('button', { type: 'submit', className: 'lep-btn', disabled: saving }, saving ? t('saving') : t('save')),
+                React.createElement(Button, { type: 'submit', variant: 'primary', size: 'sm', disabled: saving }, saving ? t('saving') : t('save')),
                 React.createElement('span', { className: 'lep-note' }, t('opCauseFixed')),
               ),
               formError ? React.createElement('div', { className: 'lep-err' }, formError) : null,
@@ -1199,19 +1229,14 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { className: 'lep-toolbar' },
-          React.createElement(
-            'label',
-            { className: 'lep-toggle', title: t('debugHint') },
-            React.createElement('input', { type: 'checkbox', checked: debug, onChange: (ev) => setDebug(ev.target.checked) }),
-            t('debugMode'),
-          ),
+          React.createElement(Checkbox, { checked: debug, onChange: (v) => setDebug(v), label: t('debugMode'), title: t('debugHint') }),
         ),
         rawBlock,
         receiptsBlock,
         React.createElement(
           'div',
-          { className: 'lep-hist' },
-          React.createElement('div', { className: 'lep-hist__head', onClick: () => setOpen(!open) }, `${open ? '▾' : '▸'} ${t('history')}`),
+          { className: 'lep-section' },
+          React.createElement(SectionHead, { icon: IconArchiveOutline, title: t('history'), open, onToggle: () => setOpen(!open) }),
           history,
         ),
         editor,
@@ -1277,11 +1302,15 @@ window.__ModuleLoader__.load({
       zh: {
         unavailable: '状态不可用',
         forbidden: '无权访问（权限已丢失）',
+        panelTitle: '状态面板',
+        panelGuide: '查看它与你的记忆、状态与审计',
         history: '历史记录',
         empty: '（暂无记录）',
         prev: '上一页',
         next: '下一页',
         pageOf: '第 {p}/{q} 页 · 共 {n} 条',
+        pageOfGroups: '第 {p}/{q} 页 · 共 {n} 组',
+        stagesTruncated: '（仅显示最近的阶段）',
         tab_audit: '审计',
         tab_recall: '召回',
         tab_retain: '写入',
@@ -1418,11 +1447,15 @@ window.__ModuleLoader__.load({
       en: {
         unavailable: 'State unavailable',
         forbidden: 'Forbidden (permission lost)',
+        panelTitle: 'Lepimemory state',
+        panelGuide: 'Inspect its memory, state and audit trail',
         history: 'History',
         empty: '(no records)',
         prev: 'Prev',
         next: 'Next',
         pageOf: 'Page {p}/{q} · {n} total',
+        pageOfGroups: 'Page {p}/{q} · {n} groups',
+        stagesTruncated: '(showing only the most recent stages)',
         tab_audit: 'Audit',
         tab_recall: 'Recall',
         tab_retain: 'Retain',
@@ -1559,19 +1592,28 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale'],
+      inject: ['slots', 'locale', 'sidebarRightTabs'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, dicts), 'lepimemory-state: locale')
-        // 面板与立绘共享同一份 /lepimemory/state 轮询源；两条目各自独立注册
+        const tLe = ctx.locale.bind(NS)
+        // 面板与立绘共享同一份 /lepimemory/state 轮询源；注册各自独立
         // （ctx.slots.inject 回调必须返回单个 disposer，不能聚合多个 register）。
         const feed = createStateFeed()
         const injectFeed = () => ({ hooks: { lepState: feed }, refreshLepState: () => feed.refresh() })
-        ctx.slots.inject('conversation.input.dock', () =>
+        // 面板：右侧栏标签页（类型定义 + session 作用域正文）。
+        ctx.effect(() => ctx.sidebarRightTabs.register({
+          id: PANEL_TAB_ID,
+          kind: PANEL_KIND,
+          title: () => tLe('panelTitle'),
+          guide: [{ id: 'lepimemory-state', order: 40, title: () => tLe('panelTitle'), description: () => tLe('panelGuide') }],
+        }), 'lepimemory-state: right-sidebar tab type')
+        ctx.slots.inject('sidebar.right.pane.tab', () =>
           ctx.slots.register(
-            { name: 'conversation.input.dock', id: 'lepimemory-state', order: 5, locale: NS, inject: injectFeed },
+            { name: 'sidebar.right.pane.tab', key: PANEL_TAB_ID, locale: NS, inject: injectFeed },
             Panel,
           ),
         )
+        // 立绘：仍在输入框上方的 dock，不随面板搬走。
         ctx.slots.inject('conversation.input.dock', () =>
           ctx.slots.register(
             { name: 'conversation.input.dock', id: 'lepimemory-avatar', order: 6, locale: NS, inject: injectFeed },

@@ -601,7 +601,8 @@ function commandVerify() {
     runEntry(path.join(REPO_ROOT, "scripts", "verify-runtime.mjs"));
     runEntry(path.join(PLUGIN_DIR, "test", "runtime.test.js"), ["--test",
         path.join(PLUGIN_DIR, "test", "recall.test.js"), path.join(PLUGIN_DIR, "test", "history.test.js"),
-        path.join(PLUGIN_DIR, "test", "action.test.js"), path.join(PLUGIN_DIR, "test", "avatar.test.js")]);
+        path.join(PLUGIN_DIR, "test", "action.test.js"), path.join(PLUGIN_DIR, "test", "avatar.test.js"),
+        path.join(PLUGIN_DIR, "test", "panel-groups.test.js")]);
     info("verify passed");
 }
 
