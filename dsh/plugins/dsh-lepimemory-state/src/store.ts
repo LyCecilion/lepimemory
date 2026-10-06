@@ -2,11 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
-import { initialState, validateState } from './shared/state.js';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
+import { initialState, validateState, type LepiState } from './shared/state.js';
+import type { ActionStatus, LifecycleStatus, SourceActor, TaskKind, TaskStatus } from './shared/domain.js';
 
 export const SCHEMA_VERSION = 1;
-const HISTORY_KINDS = new Map(['audit', 'recall', 'retain', 'forget', 'action', 'control', 'consent', 'task'].map(kind => [kind, kind]));
+const HISTORY_KINDS: Record<string, true> = {
+    audit: true, recall: true, retain: true, forget: true, action: true, control: true, consent: true, task: true,
+};
 const LEGACY_FILES = ['audit.jsonl', 'recall.jsonl', 'retain.jsonl', 'forget.jsonl', 'action.jsonl'];
 const TABLES = ['meta', 'state', 'evidence', 'requests', 'snapshots', 'lifecycle', 'grants', 'tasks', 'raw_links', 'forget_scopes', 'history_work', 'actions', 'settled_turns', 'audit'];
 const SCHEMA = `
@@ -90,8 +93,124 @@ CREATE TABLE audit (
 CREATE INDEX audit_kind ON audit(type,id DESC);
 `;
 
+// ── SQLite row shapes owned by this module ───────────────────────────
+/** `evidence` row;正文 never lives here (see evidence.ts). */
+export interface EvidenceRow {
+    id: string;
+    session_id: string;
+    message_id: string;
+    seq: number;
+    block_index: number;
+    start: number;
+    end: number;
+    actor: SourceActor;
+    at: number;
+    kind: string;
+}
+/** `lifecycle` row. */
+export interface LifecycleRow {
+    candidate_id: string;
+    status: LifecycleStatus;
+    purpose: string;
+    superseded_by: string | null;
+    confirmed_by: string | null;
+    grant_id: string | null;
+    policy_epoch: number;
+    updated_at: number;
+}
+/** `grants` row. */
+export interface GrantRow {
+    id: string;
+    scope_json: string;
+    source_ids_json: string;
+    session_id: string | null;
+    expires_at: number;
+    revoked_at: number | null;
+    allow_inference: number;
+}
+/** `snapshots` row (immutable; enforced by trigger). */
+export interface SnapshotRow {
+    candidate_id: string;
+    json: string;
+    payload_hash: string;
+    created_at: number;
+}
+/** `tasks` row. */
+export interface TaskRowRecord {
+    id: string;
+    kind: TaskKind;
+    candidate_id: string | null;
+    request_id: string | null;
+    status: TaskStatus;
+    draft_json: string | null;
+    payload_json: string | null;
+    operation_id: string | null;
+    attempts: number;
+    next_at: number;
+    expires_at: number;
+    lease_owner: string | null;
+    submitted_at: number | null;
+    error_code: string | null;
+}
+/** `audit` row. */
+export interface AuditRow {
+    id: number;
+    at: number;
+    type: string;
+    status: string;
+    session_id: string | null;
+    turn: number | null;
+    step: number | null;
+    call_id: string | null;
+    request_id: string | null;
+    task_id: string | null;
+    candidate_id: string | null;
+    operation_id: string | null;
+    data_json: string;
+}
+/** `actions` row. */
+export interface ActionRow {
+    action_id: string;
+    session_id: string;
+    turn: number | null;
+    step: number | null;
+    call_id: string;
+    title: string | null;
+    path: string | null;
+    temp_path: string | null;
+    body_hash: string | null;
+    status: ActionStatus;
+    error_code: string | null;
+    state_applied: number;
+}
+
+type SqlParam = string | number | bigint | null;
+/** Assertion boundary: `node:sqlite` exposes rows as `Record<string, SQLOutputValue>`. */
+function getRow<T>(stmt: StatementSync, ...params: SqlParam[]): T | undefined {
+    return stmt.get(...params) as unknown as T | undefined;
+}
+function getRows<T>(stmt: StatementSync, ...params: SqlParam[]): T[] {
+    return stmt.all(...params) as unknown as T[];
+}
+
+/** Event accepted by {@link Store.audit}; absent identity fields are bound as NULL. */
+export interface AuditEvent {
+    type: string;
+    status: string;
+    at?: number;
+    session_id?: string | number | null;
+    turn?: number | null;
+    step?: number | null;
+    call_id?: string | null;
+    request_id?: string | null;
+    task_id?: string | null;
+    candidate_id?: string | null;
+    operation_id?: string | null;
+    data?: Record<string, unknown>;
+}
+
 /** 历史过滤的唯一口径：`history()` 与 `historyGroups()` 共用同一 where/args，避免两处漂移。 */
-function historyScope(kind) {
+function historyScope(kind: string): { where: string; args: string[] } {
     if (kind === 'audit') return { where: '', args: [] };
     if (kind === 'task') return { where: 'WHERE type=? OR type LIKE ? OR task_id IS NOT NULL', args: [kind, `${kind}.%`] };
     return { where: 'WHERE type=? OR type LIKE ?', args: [kind, `${kind}.%`] };
@@ -101,49 +220,66 @@ function historyScope(kind) {
 const GROUP_KEY_SQL = "CASE WHEN candidate_id IS NOT NULL THEN 'c:'||candidate_id WHEN task_id IS NOT NULL THEN 't:'||task_id WHEN request_id IS NOT NULL THEN 'r:'||request_id ELSE 'i:'||id END";
 
 export class StoreError extends Error {
+    readonly code: string;
     constructor(code = 'LEPI_STORE_UNAVAILABLE') {
         super(code);
         this.code = code;
     }
 }
 
-function validState(state) {
+function validState(state: unknown): LepiState {
     if (!validateState(state).ok) throw new StoreError('LEPI_STATE_INVALID');
-    return state;
+    return state as LepiState;
 }
 
-function ownerAlive(owner) {
-    if (!owner || typeof owner.host !== 'string' || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.nonce !== 'string') throw new StoreError();
-    if (owner.host !== os.hostname()) return true;
-    try { process.kill(owner.pid, 0); return true; }
-    catch (error) { return error.code !== 'ESRCH'; }
+function ownerAlive(owner: unknown): boolean {
+    if (!owner || typeof owner !== 'object') throw new StoreError();
+    // Boundary read of the persisted owner record; each field is validated below.
+    const { host, pid, nonce } = owner as { host?: unknown; pid?: unknown; nonce?: unknown };
+    if (typeof host !== 'string' || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || typeof nonce !== 'string') throw new StoreError();
+    if (host !== os.hostname()) return true;
+    try { process.kill(pid, 0); return true; }
+    catch (error) {
+        if (error && typeof error === 'object' && 'code' in error) return error.code !== 'ESRCH';
+        return true;
+    }
 }
 
-function legacyData(dir) {
+interface LegacyRow {
+    kind: string;
+    data: Record<string, unknown>;
+}
+interface LegacyData {
+    state: LepiState | null;
+    files: string[];
+    rows: LegacyRow[];
+}
+
+function legacyData(dir: string): LegacyData {
     const stateFile = path.join(dir, 'state.json');
-    let state = null;
-    const files = [];
+    let state: LepiState | null = null;
+    const files: string[] = [];
     if (fs.existsSync(stateFile)) {
         try { state = validState(JSON.parse(fs.readFileSync(stateFile, 'utf8'))); }
         catch { throw new StoreError('LEPI_STATE_INVALID'); }
         files.push(stateFile);
     }
-    const rows = [];
+    const rows: LegacyRow[] = [];
     for (const name of LEGACY_FILES) {
         const file = path.join(dir, name);
         if (!fs.existsSync(file)) continue;
         files.push(file);
         for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
             if (!line.trim()) continue;
-            const data = JSON.parse(line);
+            const data: unknown = JSON.parse(line);
             if (!data || typeof data !== 'object' || Array.isArray(data)) throw new StoreError();
-            rows.push({ kind: name.slice(0, -6), data });
+            rows.push({ kind: name.slice(0, -6), data: data as Record<string, unknown> });
         }
     }
     return { state, files, rows };
 }
 
-function archiveLegacy(files, dir, now) {
+function archiveLegacy(files: string[], dir: string, now: number): string | null {
     if (!files.length) return null;
     const archive = path.join(dir, `legacy-${now}-${randomUUID()}`);
     fs.mkdirSync(archive, { mode: 0o700 });
@@ -157,24 +293,51 @@ function archiveLegacy(files, dir, now) {
     return archive;
 }
 
+interface HistoryQuery {
+    kind?: string;
+    limit?: number;
+    offset?: number;
+}
+interface HistoryGroupsQuery extends HistoryQuery {
+    stages?: number;
+}
+type HistoryItem = AuditRow & { data: unknown };
+export interface HistoryPage {
+    kind: string;
+    total: number;
+    limit: number;
+    offset: number;
+    items: HistoryItem[];
+}
+export interface HistoryGroupsPage {
+    kind: string;
+    total: number;
+    limit: number;
+    offset: number;
+    groups: Array<{ key: string; truncated: boolean; items: HistoryItem[] }>;
+}
+
 export class Store {
+    readonly db: DatabaseSync;
+    readonly now: () => number;
+    readonly readOnly: boolean;
     #depth = 0;
     #closed = false;
-    #owner = null;
-    constructor(db, { now, readOnly }) {
+    #owner: string | null = null;
+    constructor(db: DatabaseSync, { now, readOnly }: { now: () => number; readOnly: boolean }) {
         this.db = db;
         this.now = now;
         this.readOnly = readOnly;
     }
 
-    transaction(fn) {
+    transaction<T>(fn: () => T): T {
         if (this.#closed || this.readOnly || typeof fn !== 'function' || fn.constructor.name === 'AsyncFunction') throw new StoreError();
         const depth = this.#depth++;
         const savepoint = `lepi_${depth}`;
         try {
             this.db.exec(depth ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
             const result = fn();
-            if (result && typeof result.then === 'function') throw new StoreError();
+            if (result != null && typeof result === 'object' && 'then' in result && typeof result.then === 'function') throw new StoreError();
             this.db.exec(depth ? `RELEASE ${savepoint}` : 'COMMIT');
             return result;
         } catch (error) {
@@ -185,9 +348,9 @@ export class Store {
         } finally { this.#depth -= 1; }
     }
 
-    audit(event) {
+    audit(event: AuditEvent): number {
         if (this.#closed || this.readOnly) throw new StoreError();
-        const identity = key => event[key] ?? null;
+        const identity = (key: 'session_id' | 'turn' | 'step' | 'call_id' | 'request_id' | 'task_id' | 'candidate_id' | 'operation_id') => event[key] ?? null;
         const result = this.db.prepare(`INSERT INTO audit
             (at,type,status,session_id,turn,step,call_id,request_id,task_id,candidate_id,operation_id,data_json)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
@@ -199,14 +362,14 @@ export class Store {
         return Number(result.lastInsertRowid);
     }
 
-    readState() {
-        const row = this.db.prepare('SELECT json FROM state WHERE id=1').get();
-        if (!row) throw new StoreError('LEPI_STATE_INVALID');
+    readState(): LepiState {
+        const row = getRow<{ json?: unknown }>(this.db.prepare('SELECT json FROM state WHERE id=1'));
+        if (!row || typeof row.json !== 'string') throw new StoreError('LEPI_STATE_INVALID');
         try { return validState(JSON.parse(row.json)); }
         catch { throw new StoreError('LEPI_STATE_INVALID'); }
     }
 
-    commitState(state, event) {
+    commitState(state: LepiState, event: AuditEvent): number {
         validState(state);
         return this.transaction(() => {
             const before = this.readState();
@@ -215,26 +378,25 @@ export class Store {
         });
     }
 
-    history({ kind = 'audit', limit = 10, offset = 0 } = {}) {
-        if (!HISTORY_KINDS.has(kind) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) throw new StoreError();
+    history({ kind = 'audit', limit = 10, offset = 0 }: HistoryQuery = {}): HistoryPage {
+        if (HISTORY_KINDS[kind] !== true || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) throw new StoreError();
         const { where, args } = historyScope(kind);
-        const total = this.db.prepare(`SELECT count(*) AS n FROM audit ${where}`).get(...args).n;
-        const items = this.db.prepare(`SELECT * FROM audit ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, limit, offset)
+        const total = getRow<{ n: number }>(this.db.prepare(`SELECT count(*) AS n FROM audit ${where}`), ...args)?.n ?? 0;
+        const items = getRows<AuditRow>(this.db.prepare(`SELECT * FROM audit ${where} ORDER BY id DESC LIMIT ? OFFSET ?`), ...args, limit, offset)
             .map(row => ({ ...row, data: JSON.parse(row.data_json) }));
         return { kind, total, limit, offset, items };
     }
 
     /** 按「主体」分组的分页：以组为单位分页，组内阶段新→旧。 */
-    historyGroups({ kind = 'audit', limit = 10, offset = 0, stages = 50 } = {}) {
-        if (!HISTORY_KINDS.has(kind) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0
+    historyGroups({ kind = 'audit', limit = 10, offset = 0, stages = 50 }: HistoryGroupsQuery = {}): HistoryGroupsPage {
+        if (HISTORY_KINDS[kind] !== true || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0
             || !Number.isSafeInteger(stages) || stages < 1 || stages > 100) throw new StoreError();
         const { where, args } = historyScope(kind);
-        const total = this.db.prepare(`SELECT count(DISTINCT ${GROUP_KEY_SQL}) AS n FROM audit ${where}`).get(...args).n;
-        const keys = this.db.prepare(`SELECT ${GROUP_KEY_SQL} AS gkey, MAX(id) AS latest FROM audit ${where} GROUP BY gkey ORDER BY latest DESC LIMIT ? OFFSET ?`)
-            .all(...args, limit, offset);
+        const total = getRow<{ n: number }>(this.db.prepare(`SELECT count(DISTINCT ${GROUP_KEY_SQL}) AS n FROM audit ${where}`), ...args)?.n ?? 0;
+        const keys = getRows<{ gkey: string; latest: number }>(this.db.prepare(`SELECT ${GROUP_KEY_SQL} AS gkey, MAX(id) AS latest FROM audit ${where} GROUP BY gkey ORDER BY latest DESC LIMIT ? OFFSET ?`), ...args, limit, offset);
         const stageStmt = this.db.prepare(`SELECT * FROM audit WHERE ${GROUP_KEY_SQL} = ? ORDER BY id DESC LIMIT ?`);
         const groups = keys.map(({ gkey }) => {
-            const rows = stageStmt.all(gkey, stages + 1);
+            const rows = getRows<AuditRow>(stageStmt, gkey, stages + 1);
             return {
                 key: gkey,
                 truncated: rows.length > stages,
@@ -244,26 +406,28 @@ export class Store {
         return { kind, total, limit, offset, groups };
     }
 
-    get policyEpoch() {
-        return Number(this.db.prepare("SELECT value FROM meta WHERE key='policy_epoch'").get().value);
+    get policyEpoch(): number {
+        const row = getRow<{ value: unknown }>(this.db.prepare("SELECT value FROM meta WHERE key='policy_epoch'"));
+        if (!row) throw new StoreError('LEPI_STATE_INVALID');
+        return Number(row.value);
     }
 
-    bumpPolicyEpoch() {
+    bumpPolicyEpoch(): number {
         if (!this.#depth || this.readOnly) throw new StoreError();
         this.db.prepare("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='policy_epoch'").run();
         return this.policyEpoch;
     }
 
-    initialize({ fresh, legacyDir, initialLegacy }) {
+    initialize({ fresh, legacyDir, initialLegacy }: { fresh: boolean; legacyDir: string; initialLegacy: LegacyData | null }): void {
         this.transaction(() => {
             if (fresh) {
                 this.db.exec(SCHEMA);
                 this.db.prepare('INSERT INTO meta(key,value) VALUES (?,?)').run('schema_version', String(SCHEMA_VERSION));
                 this.db.prepare('INSERT INTO meta(key,value) VALUES (?,?)').run('policy_epoch', '0');
             }
-            const prior = this.db.prepare("SELECT value FROM meta WHERE key='owner'").get();
+            const prior = getRow<{ value: unknown }>(this.db.prepare("SELECT value FROM meta WHERE key='owner'"));
             if (prior) {
-                const owner = JSON.parse(prior.value);
+                const owner: unknown = JSON.parse(prior.value as string);
                 if (ownerAlive(owner)) throw new StoreError('LEPI_STORE_OWNED');
             }
             this.db.prepare(`UPDATE tasks SET lease_owner=NULL,
@@ -272,19 +436,20 @@ export class Store {
                 WHERE lease_owner IS NOT NULL`).run(this.now());
             this.#owner = JSON.stringify({ host: os.hostname(), pid: process.pid, nonce: randomUUID() });
             this.db.prepare("INSERT INTO meta(key,value) VALUES ('owner',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(this.#owner);
-            if (!this.db.prepare("SELECT value FROM meta WHERE key='legacy_migrated'").get()) {
+            if (!getRow(this.db.prepare("SELECT value FROM meta WHERE key='legacy_migrated'"))) {
                 const legacy = initialLegacy ?? legacyData(legacyDir);
                 const archive = archiveLegacy(legacy.files, legacyDir, this.now());
-                if (!this.db.prepare('SELECT id FROM state WHERE id=1').get()) {
+                if (!getRow(this.db.prepare('SELECT id FROM state WHERE id=1'))) {
                     const state = legacy.state ?? initialState(new Date(this.now()).toISOString());
                     this.db.prepare('INSERT INTO state(id,json) VALUES (1,?)').run(JSON.stringify(state));
                 }
                 for (const { kind, data } of legacy.rows) {
-                    const parsedAt = typeof data.at === 'number' ? data.at : Date.parse(data.at);
+                    const parsedAt = typeof data.at === 'number' ? data.at : Date.parse(data.at as string);
                     this.audit({ type: kind, status: data.ok === false || data.isError === true ? 'failed' : 'unknown',
                         at: Number.isSafeInteger(parsedAt) ? parsedAt : this.now(),
-                        session_id: data.session_id ?? data.session ?? null,
-                        turn: data.turn ?? null, step: data.step ?? null, call_id: data.call_id ?? data.callId ?? null,
+                        session_id: (data.session_id ?? data.session) as string | number | null,
+                        turn: (data.turn ?? null) as number | null, step: (data.step ?? null) as number | null,
+                        call_id: (data.call_id ?? data.callId ?? null) as string | null,
                         data: { legacy: true, record: data } });
                 }
                 this.db.prepare('INSERT INTO meta(key,value) VALUES (?,?)').run('legacy_migrated', String(this.now()));
@@ -294,11 +459,12 @@ export class Store {
         });
     }
 
-    close() {
+    close(): void {
         if (this.#closed) return;
+        const owner = this.#owner;
         try {
-            if (!this.readOnly && this.#owner) this.transaction(() => {
-                this.db.prepare("DELETE FROM meta WHERE key='owner' AND value=?").run(this.#owner);
+            if (!this.readOnly && owner) this.transaction(() => {
+                this.db.prepare("DELETE FROM meta WHERE key='owner' AND value=?").run(owner);
             });
         } finally {
             this.db.close();
@@ -307,9 +473,16 @@ export class Store {
     }
 }
 
-export function openStore({ dbFile, legacyDir = path.dirname(dbFile), now = Date.now, readOnly = false }) {
-    let db;
-    let createdStat;
+export interface OpenStoreOptions {
+    dbFile: string;
+    legacyDir?: string;
+    now?: () => number;
+    readOnly?: boolean;
+}
+
+export function openStore({ dbFile, legacyDir = path.dirname(dbFile), now = Date.now, readOnly = false }: OpenStoreOptions): Store {
+    let db: DatabaseSync | undefined;
+    let createdStat: fs.BigIntStats | undefined;
     try {
         const fresh = !fs.existsSync(dbFile);
         const initialLegacy = fresh && !readOnly ? legacyData(legacyDir) : null;
@@ -318,7 +491,7 @@ export function openStore({ dbFile, legacyDir = path.dirname(dbFile), now = Date
             fs.mkdirSync(path.dirname(dbFile), { recursive: true, mode: 0o700 });
             // Network-shared homes are unsupported. Known Linux network FS types
             // are rejected; a foreign-host owner is never reclaimed either.
-            const type = fs.statfsSync(path.dirname(dbFile)).type;
+            const type = Number(fs.statfsSync(path.dirname(dbFile)).type);
             if ([0x6969, 0xff534d42, 0x517b, 0xfe534d42].includes(type)) throw new StoreError();
             if (fresh) {
                 const fd = fs.openSync(dbFile, 'wx', 0o600);
@@ -328,9 +501,9 @@ export function openStore({ dbFile, legacyDir = path.dirname(dbFile), now = Date
         }
         db = new DatabaseSync(dbFile, { readOnly });
         if (!fresh) {
-            const version = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()?.value;
+            const version = getRow<{ value?: unknown }>(db.prepare("SELECT value FROM meta WHERE key='schema_version'"))?.value;
             if (version !== String(SCHEMA_VERSION)) throw new StoreError();
-            const present = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+            const present = new Set(getRows<{ name: unknown }>(db.prepare("SELECT name FROM sqlite_master WHERE type='table'")).map(row => row.name));
             if (TABLES.some(name => !present.has(name))) throw new StoreError();
         }
         db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=1000;');

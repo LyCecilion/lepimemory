@@ -37,11 +37,14 @@
  * 本模块不启动任务、不注册 hook、不二次写 session（sessionQuery 只读）。
  */
 import { deriveEventMessage } from '@deepseek-ai/dsh-session/surface';
+import type { StatementSync } from 'node:sqlite';
+import type { EvidenceRow, Store } from './store.js';
+import type { SourceActor } from './shared/domain.js';
 
-const ACTOR_USER = 'user';
-const ACTOR_CONTEXT = 'context';
-const ACTOR_ASSISTANT = 'assistant';
-const ACTOR_ACTION = 'action';
+const ACTOR_USER: SourceActor = 'user';
+const ACTOR_CONTEXT: SourceActor = 'context';
+const ACTOR_ASSISTANT: SourceActor = 'assistant';
+const ACTOR_ACTION: SourceActor = 'action';
 
 const KIND_USER = 'user_message';
 const KIND_CONTEXT = 'context';
@@ -49,27 +52,103 @@ const KIND_ASSISTANT = 'assistant_message';
 const KIND_ACTION = 'verified_action';
 const KIND_SPLICE = 'splice';
 
-const MEDIA_BLOCK_TYPES = new Set(['image', 'file']);
+const MEDIA_BLOCK_TYPES: Record<string, true> = { image: true, file: true };
 /** `recent` 单次最多回看的 evidence 行数（正文预算另行裁剪）。 */
 const RECENT_SCAN_LIMIT = 200;
 
-const isoOf = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+// ── 边界形状（dsh-session append / dsh-agent spliced 的实际 envelope）──────
+/** session 的最小面：只读 id。 */
+interface SessionLike {
+    id?: unknown;
+}
+/** session event：type/seq/time 与 data 由 dsh-session 定义。 */
+interface SessionEventLike {
+    type?: unknown;
+    seq?: unknown;
+    time?: unknown;
+    data?: unknown;
+}
+/** event.data：user 消息本身，或 { inserted } / { message } envelope。 */
+interface MessageEnvelopeLike {
+    id?: unknown;
+    source?: unknown;
+    content?: unknown;
+    toolCallId?: unknown;
+    inserted?: unknown;
+    message?: unknown;
+}
+/** message 的最小面：身份、正文、作者判定与行动 call id。 */
+interface MessageLike {
+    id?: unknown;
+    content?: unknown;
+    source?: unknown;
+    toolCallId?: unknown;
+}
+/** message source 的最小面：只判定注入上下文。 */
+interface SourceLike {
+    kind?: unknown;
+}
+/** content block 的最小面：只读 type/text。 */
+interface ContentBlockLike {
+    type?: unknown;
+    text?: unknown;
+}
+/** live agent handle 的最小面：会话 id。 */
+interface AgentLike {
+    session?: { id?: unknown } | null;
+    id?: unknown;
+}
+interface SpliceRow {
+    seq?: unknown;
+    at?: unknown;
+}
+interface RequestRow {
+    session_id?: unknown;
+    kind?: unknown;
+    source_ids_json?: unknown;
+}
+interface ActionStatusRow {
+    status?: unknown;
+}
+
+/** 边界断言：event/inbox 里的 message 一律先过这里，再逐字段 typeof 检查。 */
+function asMessage(value: unknown): MessageLike | null {
+    return value && typeof value === 'object' ? (value as MessageLike) : null;
+}
+/** 边界断言：content 一律先过这里，再逐 block 检查 type/text。 */
+function asBlocks(content: unknown): readonly ContentBlockLike[] {
+    return Array.isArray(content) ? (content as readonly ContentBlockLike[]) : [];
+}
+
+function isoOf(ms: number): string | null {
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
 
 /**
  * evidence id 的 opaque 编码。语义分量是契约里记录的
  * `session:seq:block_index:start:end`；额外内嵌 `message_id` 以保证
  * 同一次 splice 内多消息、同偏移时的 id 唯一（PK 唯一，见 store.js 表约束）。
  */
-function encodeId(sessionId, messageId, seq, blockIndex, start, end) {
+function encodeId(sessionId: string, messageId: string, seq: number, blockIndex: number, start: number, end: number): string {
     return Buffer.from(JSON.stringify([sessionId, messageId, seq, blockIndex, start, end])).toString('base64url');
 }
 
-export function decodeEvidenceId(id) {
+export interface DecodedEvidenceId {
+    sessionId: string;
+    messageId: string;
+    seq: number;
+    blockIndex: number;
+    start: number;
+    end: number;
+}
+
+export function decodeEvidenceId(id: unknown): DecodedEvidenceId | null {
     try {
-        const parts = JSON.parse(Buffer.from(String(id), 'base64url').toString('utf8'));
+        const parts: unknown = JSON.parse(Buffer.from(String(id), 'base64url').toString('utf8'));
         if (!Array.isArray(parts) || parts.length !== 6) return null;
         const [sessionId, messageId, seq, blockIndex, start, end] = parts;
         if (typeof sessionId !== 'string' || typeof messageId !== 'string') return null;
+        if (typeof seq !== 'number' || typeof blockIndex !== 'number' || typeof start !== 'number' || typeof end !== 'number') return null;
         for (const n of [seq, blockIndex, start, end]) if (!Number.isSafeInteger(n) || n < 0) return null;
         if (end < start) return null;
         return { sessionId, messageId, seq, blockIndex, start, end };
@@ -79,60 +158,132 @@ export function decodeEvidenceId(id) {
 }
 
 /** 一条消息 content 里的 text block（保留原始 block 下标），跳过 reasoning/tool-call/媒体。 */
-function textBlocks(content) {
-    if (!Array.isArray(content)) return [];
-    const out = [];
-    for (let index = 0; index < content.length; index += 1) {
-        const block = content[index];
+function textBlocks(content: unknown): Array<{ index: number; text: string }> {
+    const blocks = asBlocks(content);
+    const out: Array<{ index: number; text: string }> = [];
+    for (let index = 0; index < blocks.length; index += 1) {
+        const block = blocks[index];
         if (block && block.type === 'text' && typeof block.text === 'string') out.push({ index, text: block.text });
     }
     return out;
 }
 
-function hasMedia(content) {
-    return Array.isArray(content) && content.some((block) => block && MEDIA_BLOCK_TYPES.has(block.type));
+function hasMedia(content: unknown): boolean {
+    return asBlocks(content).some((block) => typeof block.type === 'string' && MEDIA_BLOCK_TYPES[block.type] === true);
 }
 
-function sessionIdOf(agent) {
-    if (!agent) return null;
-    const id = agent.session?.id ?? agent.id;
-    return id == null ? null : String(id);
+function sessionIdOf(agent: unknown): string | null {
+    if (!agent || typeof agent !== 'object') return null;
+    const handle = agent as AgentLike;
+    const value = handle.session?.id ?? handle.id;
+    return value == null ? null : String(value);
+}
+
+/** `read` 与 `recent` 返回的来源；`at` 可为 null（时间无法解析时）。 */
+export interface ResolvedEvidence {
+    id: string;
+    actor: SourceActor;
+    kind: string;
+    at: string | null;
+    text: string;
+}
+export interface ExcludedEvidence {
+    id: string | null;
+    code: string;
+}
+/** Step 9 注入的 isReadable(ref) 所看到的引用。 */
+export interface EvidenceRef {
+    id: string;
+    session_id: string;
+    message_id: string;
+    seq: number;
+    block_index: number;
+    start: number;
+    end: number;
+    actor: SourceActor;
+    kind: string;
+}
+export interface ReadEvidenceOptions {
+    agent?: unknown;
+    signal?: AbortSignal | null;
+    request_id?: string;
+}
+export interface RecentEvidenceOptions {
+    maxChars?: number;
+    actor?: string;
+    beforeAt?: number;
+    signal?: AbortSignal;
+}
+/** createEvidenceIndex 的门面，供 processor/history 消费。 */
+export interface EvidenceIndex {
+    observe(session: unknown, event: unknown): void;
+    claimed(agent: unknown, messages: readonly unknown[], turn: number, step: number): string[];
+    holdRequest(requestId: string, ids: readonly string[], agent: unknown): boolean;
+    releaseRequest(requestId: string): void;
+    advanceClaim(ids: readonly string[], context: { agent: unknown; previousEpoch: number; request_id: string }): boolean;
+    read(ids: readonly unknown[], options?: ReadEvidenceOptions): Promise<{ sources: ResolvedEvidence[]; excluded: ExcludedEvidence[] }>;
+    recent(agent: unknown, options?: RecentEvidenceOptions): Promise<{ sources: ResolvedEvidence[] }>;
+    setReadableGate(gate: ((ref: EvidenceRef) => unknown) | null): void;
+    dispose(): void;
+}
+
+interface SurfaceSnapshotLike {
+    events?: readonly unknown[];
+}
+interface SessionQueryLike {
+    readSurface(sessionId: string): Promise<SurfaceSnapshotLike | null>;
+}
+interface PreparedStatements {
+    insert: StatementSync;
+    byId: StatementSync;
+    earliestSplice: StatementSync;
+    hasCommitted: StatementSync;
+    recent: StatementSync;
+}
+interface ActiveClaim {
+    turn: number;
+    step: number;
+    epoch: number | null;
+    ids: Set<string>;
+}
+interface RequestClaim {
+    agent: unknown;
+    epoch: number | null;
+    ids: Set<string>;
+}
+interface ResolveContext {
+    loadSurface: () => Promise<Map<string, MessageLike> | null>;
+    agent: unknown;
+    requestClaim?: RequestClaim;
 }
 
 /**
- * @param {{ store: object, sessionQuery?: object }} deps
- *   - store: openStore() 产物；仅用其 `db`（prepared SQL）、`policyEpoch` getter、`readOnly`。
- * @returns {{
- *   observe(session: object, event: object): void,
- *   claimed(agent: object, messages: readonly object[], turn: number, step: number): string[],
- *   read(ids: readonly string[], options: { agent?: object, signal?: AbortSignal }): Promise<{ sources: object[], excluded: object[] }>,
- *   recent(agent: object, options: { maxChars: number }): Promise<{ sources: object[] }>,
- *   setReadableGate(gate: ((ref: object) => boolean) | null): void,
- *   dispose(): void,
- * }}
+ * @param deps.store: openStore() 产物；仅用其 `db`（prepared SQL）、`policyEpoch` getter、`readOnly`。
+ * @param deps.sessionQuery: dsh-session-query 服务（只读 `readSurface`）。
  */
-export function createEvidenceIndex({ store, sessionQuery } = {}) {
-    const db = store?.db;
-    if (!db || typeof db.prepare !== 'function') throw new Error('LEPI_STORE_UNAVAILABLE');
+export function createEvidenceIndex({ store, sessionQuery }: { store?: Store; sessionQuery?: SessionQueryLike } = {}): EvidenceIndex {
+    if (!store || !store.db || typeof store.db.prepare !== 'function') throw new Error('LEPI_STORE_UNAVAILABLE');
+    const liveStore = store;
+    const db = store.db;
     const writable = store.readOnly !== true;
 
     /** messageId -> (string|undefined)[]，按下标对齐 content；仅 text block 有字符串。 */
-    const bodies = new Map();
+    const bodies = new Map<string, Array<string | undefined>>();
     /** messageId -> boolean：消息是否含 image/file 等媒体/外部引用 block。 */
-    const mediaFlags = new Map();
+    const mediaFlags = new Map<string, boolean>();
     /** messageId -> { seq, at }：**首次** splice 的真实 event 序号与毫秒时间（不可刷新）。 */
-    const firstSplice = new Map();
+    const firstSplice = new Map<string, { seq: number; at: number }>();
     /** messageId -> number：首次捕获时的 policy_epoch，用于 fence 后的保守判定。 */
-    const captureEpoch = new Map();
+    const captureEpoch = new Map<string, number | null>();
     /** messageId：本进程内已提交（user/assistant/action/context）来源。 */
-    const committed = new Set();
+    const committed = new Set<string>();
     /** sessionId -> { turn, step, epoch, ids:Set<messageId> }：本步 claimed 的活跃输入。 */
-    const active = new Map();
+    const active = new Map<string | null, ActiveClaim>();
     // Explicit controller-to-worker handoff only; heap-only, exact request/agent/epoch.
-    const requestClaims = new Map();
+    const requestClaims = new Map<string, RequestClaim>();
     /** 可选 Step 9 注入的 isReadable(ref)。 */
-    let gate = null;
-    let prepared = null;
+    let gate: ((ref: EvidenceRef) => unknown) | null = null;
+    let prepared: PreparedStatements | null = null;
 
     const sql = () => (prepared ??= {
         insert: db.prepare(
@@ -155,21 +306,21 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         ),
     });
 
-    function epochNow() {
+    function epochNow(): number | null {
         try {
-            return store.policyEpoch;
+            return liveStore.policyEpoch;
         } catch {
             return null;
         }
     }
 
-    function rememberBody(message) {
+    function rememberBody(message: MessageLike): void {
         if (!message || message.id == null) return;
         const mid = String(message.id);
         if (!bodies.has(mid)) {
-            const arr = [];
-            if (Array.isArray(message.content)) {
-                for (const block of message.content) arr.push(block && block.type === 'text' && typeof block.text === 'string' ? block.text : undefined);
+            const arr: Array<string | undefined> = [];
+            for (const block of asBlocks(message.content)) {
+                arr.push(block.type === 'text' && typeof block.text === 'string' ? block.text : undefined);
             }
             bodies.set(mid, arr);
             mediaFlags.set(mid, hasMedia(message.content));
@@ -177,7 +328,7 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         }
     }
 
-    function persistRows(sessionId, message, seq, at, actor, kind) {
+    function persistRows(sessionId: string, message: MessageLike, seq: number, at: number, actor: SourceActor, kind: string): void {
         if (!writable) return;
         const mid = String(message.id);
         for (const { index, text } of textBlocks(message.content)) {
@@ -187,16 +338,16 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** 首次 splice wins：仅在从未见过该 message id 时写入一条 splice 行。 */
-    function ensureSplice(sessionId, message, seq, at) {
+    function ensureSplice(sessionId: string, message: MessageLike, seq: number, at: number): void {
         const mid = String(message.id);
         rememberBody(message);
         let known = firstSplice.get(mid);
         if (!known) {
             try {
-                const row = sql().earliestSplice.get(sessionId, mid);
+                const row = sql().earliestSplice.get(sessionId, mid) as SpliceRow | undefined;
                 if (row) known = { seq: Number(row.seq), at: Number(row.at) };
             } catch {
-                known = null;
+                known = undefined;
             }
         }
         if (known) {
@@ -207,7 +358,7 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         persistRows(sessionId, message, seq, at, ACTOR_USER, KIND_SPLICE);
     }
 
-    function isCommitted(sessionId, mid) {
+    function isCommitted(sessionId: string | null, mid: string): boolean {
         if (committed.has(mid)) return true;
         try {
             const row = sql().hasCommitted.get(sessionId, mid);
@@ -222,7 +373,7 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** 已提交来源：`at` 采用最初 splice 时间（存在时），保证 requeue 后时间不可变。 */
-    function recordCommitted(sessionId, message, seq, at, actor, kind) {
+    function recordCommitted(sessionId: string, message: MessageLike, seq: number, at: number, actor: SourceActor, kind: string): void {
         const mid = String(message.id);
         rememberBody(message);
         committed.add(mid);
@@ -231,10 +382,10 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         persistRows(sessionId, message, seq, useAt, actor, kind);
     }
 
-    function actionExecuted(sessionId, callId) {
+    function actionExecuted(sessionId: string, callId: unknown): boolean {
         if (callId == null) return false;
         try {
-            const row = db.prepare('SELECT status FROM actions WHERE session_id=? AND call_id=?').get(sessionId, String(callId));
+            const row = db.prepare('SELECT status FROM actions WHERE session_id=? AND call_id=?').get(sessionId, String(callId)) as ActionStatusRow | undefined;
             return row?.status === 'executed';
         } catch {
             return false;
@@ -242,26 +393,33 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** 注册到 `session/event`（纯 observe；不得重入 append，不得抛穿 append 边界）。 */
-    function observe(session, event) {
-        if (!session || !event || !event.type) return;
-        const sessionId = String(session.id);
+    function observe(session: unknown, event: unknown): void {
+        if (!session || typeof session !== 'object' || !event || typeof event !== 'object') return;
+        const handle = session as SessionLike;
+        const envelope = event as SessionEventLike;
+        if (!envelope.type) return;
+        const sessionId = String(handle.id);
+        const data: MessageEnvelopeLike | null = envelope.data && typeof envelope.data === 'object' ? (envelope.data as MessageEnvelopeLike) : null;
+        const type = envelope.type as string;
         try {
-            switch (event.type) {
+            switch (type) {
                 case 'agent/inbox/spliced': {
-                    const inserted = event.data?.inserted;
+                    const inserted = data?.inserted;
                     if (Array.isArray(inserted)) {
-                        for (const message of inserted) {
-                            if (message?.id != null) ensureSplice(sessionId, message, Number(event.seq), Number(event.time));
+                        for (const raw of inserted) {
+                            const message = asMessage(raw);
+                            if (message && message.id != null) ensureSplice(sessionId, message, Number(envelope.seq), Number(envelope.time));
                         }
                     }
                     break;
                 }
                 case 'user/message': {
-                    const message = event.data;
-                    if (message?.id != null) {
-                        const context = message.source?.kind !== 'user';
+                    const message = data;
+                    if (message && message.id != null) {
+                        const source = message.source as SourceLike | undefined;
+                        const context = source?.kind !== 'user';
                         recordCommitted(
-                            sessionId, message, Number(event.seq), Number(event.time),
+                            sessionId, message, Number(envelope.seq), Number(envelope.time),
                             context ? ACTOR_CONTEXT : ACTOR_USER,
                             context ? KIND_CONTEXT : KIND_USER,
                         );
@@ -269,16 +427,16 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
                     break;
                 }
                 case 'assistant/message': {
-                    const message = event.data?.message;
+                    const message = asMessage(data?.message);
                     if (message?.id != null) {
-                        recordCommitted(sessionId, message, Number(event.seq), Number(event.time), ACTOR_ASSISTANT, KIND_ASSISTANT);
+                        recordCommitted(sessionId, message, Number(envelope.seq), Number(envelope.time), ACTOR_ASSISTANT, KIND_ASSISTANT);
                     }
                     break;
                 }
                 case 'tool/result': {
-                    const message = event.data?.message;
+                    const message = asMessage(data?.message);
                     if (message?.id != null && actionExecuted(sessionId, message.toolCallId)) {
-                        recordCommitted(sessionId, message, Number(event.seq), Number(event.time), ACTOR_ACTION, KIND_ACTION);
+                        recordCommitted(sessionId, message, Number(envelope.seq), Number(envelope.time), ACTOR_ACTION, KIND_ACTION);
                     }
                     break;
                 }
@@ -294,21 +452,22 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** 本步即将进入 step 的 messages → 引用最初 splice 的 source id 数组（不读 inbox 本体）。 */
-    function claimed(agent, messages, turn, step) {
+    function claimed(agent: unknown, messages: readonly unknown[], turn: number, step: number): string[] {
         const sessionId = sessionIdOf(agent);
         if (!sessionId) return [];
-        const ids = [];
-        const activeIds = new Set();
-        for (const message of Array.isArray(messages) ? messages : []) {
-            const mid = message?.id == null ? null : String(message.id);
-            if (!mid) continue;
+        const ids: string[] = [];
+        const activeIds = new Set<string>();
+        for (const raw of Array.isArray(messages) ? messages : []) {
+            const message = asMessage(raw);
+            if (!message || message.id == null) continue;
+            const mid = String(message.id);
             let splice = firstSplice.get(mid);
             if (!splice) {
                 try {
-                    const row = sql().earliestSplice.get(sessionId, mid);
+                    const row = sql().earliestSplice.get(sessionId, mid) as SpliceRow | undefined;
                     if (row) splice = { seq: Number(row.seq), at: Number(row.at) };
                 } catch {
-                    splice = null;
+                    splice = undefined;
                 }
                 if (splice) firstSplice.set(mid, splice);
             }
@@ -323,27 +482,28 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         return ids;
     }
 
-    function holdRequest(requestId, ids, agent) {
+    function holdRequest(requestId: string, ids: readonly string[], agent: unknown): boolean {
         const sessionId = sessionIdOf(agent);
-        const row = db.prepare('SELECT session_id,kind,source_ids_json FROM requests WHERE id=?').get(requestId);
+        const row = db.prepare('SELECT session_id,kind,source_ids_json FROM requests WHERE id=?').get(requestId) as RequestRow | undefined;
         const refs = ids.map(decodeEvidenceId);
-        if (!row || row.session_id !== sessionId || !['remember', 'correct', 're_remember'].includes(row.kind)
-            || refs.some(ref => !ref || ref.sessionId !== sessionId)
-            || ids.some(id => !JSON.parse(row.source_ids_json).includes(id))) return false;
+        if (!row || row.session_id !== sessionId || !['remember', 'correct', 're_remember'].includes(row.kind as string)
+            || refs.some(ref => !ref || ref.sessionId !== sessionId)) return false;
+        const sourceIds = JSON.parse(row.source_ids_json as string) as string[];
+        if (ids.some(id => !sourceIds.includes(id))) return false;
         const claim = active.get(sessionId);
-        if (refs.some(ref => !isCommitted(sessionId, ref.messageId)
-            && (!claim || claim.epoch !== epochNow() || !claim.ids.has(ref.messageId)))) return false;
+        if (refs.some(ref => !ref || (!isCommitted(sessionId, ref.messageId)
+            && (!claim || claim.epoch !== epochNow() || !claim.ids.has(ref.messageId))))) return false;
         requestClaims.set(requestId, { agent, epoch: epochNow(), ids: new Set(ids) });
         return true;
     }
 
-    function releaseRequest(requestId) { requestClaims.delete(requestId); }
+    function releaseRequest(requestId: string): void { requestClaims.delete(requestId); }
 
     // Only the caller's validated, single per-item grant may advance an existing claim.
-    function advanceClaim(ids, { agent, previousEpoch, request_id }) {
+    function advanceClaim(ids: readonly string[], { agent, previousEpoch, request_id }: { agent: unknown; previousEpoch: number; request_id: string }): boolean {
         const sessionId = sessionIdOf(agent);
         if (epochNow() !== previousEpoch + 1) return false;
-        const uncommitted = ids.map(id => decodeEvidenceId(id)).filter(ref => ref && !isCommitted(ref.sessionId, ref.messageId));
+        const uncommitted = ids.map(id => decodeEvidenceId(id)).filter((ref): ref is DecodedEvidenceId => !!ref && !isCommitted(ref.sessionId, ref.messageId));
         if (uncommitted.some(ref => ref.sessionId !== sessionId)) return false;
         if (!uncommitted.length) return true;
         const claim = active.get(sessionId);
@@ -351,25 +511,25 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
         const live = claim && claim.epoch === previousEpoch && uncommitted.every(ref => claim.ids.has(ref.messageId));
         const scoped = held && held.agent === agent && held.epoch === previousEpoch && ids.every(id => held.ids.has(id));
         if (!live && !scoped) return false;
-        if (live) claim.epoch = epochNow();
-        if (scoped) held.epoch = epochNow();
+        if (live && claim) claim.epoch = epochNow();
+        if (scoped && held) held.epoch = epochNow();
         return true;
     }
 
-    function sliceBody(mid, row) {
+    function sliceBody(mid: string, row: EvidenceRow): string | null {
         const arr = bodies.get(mid);
         const text = Array.isArray(arr) ? arr[row.block_index] : undefined;
         if (typeof text !== 'string' || row.end > text.length) return null;
         return text.slice(row.start, row.end);
     }
 
-    function sliceMessage(message, row) {
-        const block = message?.content?.[row.block_index];
+    function sliceMessage(message: MessageLike, row: EvidenceRow): string | null {
+        const block = asBlocks(message.content)[row.block_index];
         if (!block || block.type !== 'text' || typeof block.text !== 'string' || row.end > block.text.length) return null;
         return block.text.slice(row.start, row.end);
     }
 
-    function mediaHeld(mid) {
+    function mediaHeld(mid: string): boolean {
         if (!mediaFlags.get(mid)) return false;
         // 有策略门时由 gate 决定；无门且捕获后 epoch 已变 → 保守 hold。
         return typeof gate !== 'function'
@@ -377,10 +537,7 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
             && captureEpoch.get(mid) !== epochNow();
     }
 
-    /**
-     * @returns {Promise<{ text?: string, code?: string }>}
-     */
-    async function resolveRow(row, ctx) {
+    async function resolveRow(row: EvidenceRow, ctx: ResolveContext): Promise<{ text?: string; code?: string }> {
         const mid = row.message_id;
         const uncommitted = row.kind === KIND_SPLICE && !isCommitted(row.session_id, mid);
         if (mediaHeld(mid)) return { code: 'LEPI_INPUT_RESUBMIT_REQUIRED' };
@@ -408,32 +565,31 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
 
     /**
      * 受限取证：仅当前会话、仅政策/epoch 允许、仅当前有效 surface 上的明确片段。
-     * @returns {{ sources: {id,actor,kind,at,text}[], excluded: {id,code}[] }}
      */
-    async function read(ids, options = {}) {
+    async function read(ids: readonly unknown[], options: ReadEvidenceOptions = {}): Promise<{ sources: ResolvedEvidence[]; excluded: ExcludedEvidence[] }> {
         const list = Array.isArray(ids) ? ids : [];
         const agent = options.agent ?? null;
         const signal = options.signal ?? null;
         const sessionId = sessionIdOf(agent);
-        const sources = [];
-        const excluded = [];
+        const sources: ResolvedEvidence[] = [];
+        const excluded: ExcludedEvidence[] = [];
         if (!sessionId || !Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
             return { sources, excluded: list.map(id => ({ id: typeof id === 'string' ? id : null, code: 'LEPI_CONTROL_UNAVAILABLE' })) };
         }
 
-        let surfaceMap;
+        let surfaceMap: Map<string, MessageLike> | null | undefined;
         let surfaceLoaded = false;
-        const loadSurface = async () => {
-            if (surfaceLoaded) return surfaceMap;
+        const loadSurface = async (): Promise<Map<string, MessageLike> | null> => {
+            if (surfaceLoaded) return surfaceMap ?? null;
             surfaceLoaded = true;
             if (!sessionId || !sessionQuery || typeof sessionQuery.readSurface !== 'function') return (surfaceMap = null);
             try {
                 const snapshot = await sessionQuery.readSurface(sessionId);
-                const map = new Map();
+                const map = new Map<string, MessageLike>();
                 for (const event of snapshot?.events ?? []) {
-                    let message = null;
+                    let message: MessageLike | null = null;
                     try {
-                        message = deriveEventMessage(event);
+                        message = deriveEventMessage(event as Parameters<typeof deriveEventMessage>[0]);
                     } catch {
                         message = null;
                     }
@@ -443,17 +599,17 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
             } catch {
                 surfaceMap = null;
             }
-            return surfaceMap;
+            return surfaceMap ?? null;
         };
 
-        for (const rawId of list) {
+        const stringIds = ids as readonly string[];
+        for (const id of stringIds) {
             if (signal?.aborted) break;
-            const id = rawId;
-            let row = null;
+            let row: EvidenceRow | undefined;
             try {
-                row = sql().byId.get(id);
+                row = sql().byId.get(id) as EvidenceRow | undefined;
             } catch {
-                row = null;
+                row = undefined;
             }
             if (!row) {
                 excluded.push({ id, code: 'LEPI_CONTROL_UNAVAILABLE' });
@@ -464,7 +620,7 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
                 continue;
             }
             if (typeof gate === 'function') {
-                const ref = {
+                const ref: EvidenceRef = {
                     id, session_id: row.session_id, message_id: row.message_id, seq: Number(row.seq),
                     block_index: Number(row.block_index), start: Number(row.start), end: Number(row.end),
                     actor: row.actor, kind: row.kind,
@@ -473,14 +629,15 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
                 try {
                     allowed = Boolean(gate(ref));
                 } catch {
-                    allowed = false;
+                    /* gate failure ⇒ conservative hold; allowed stays false */
                 }
                 if (!allowed) {
                     excluded.push({ id, code: 'LEPI_INPUT_RESUBMIT_REQUIRED' });
                     continue;
                 }
             }
-            const resolved = await resolveRow(row, { loadSurface, agent, requestClaim: requestClaims.get(options.request_id) });
+            const requestClaim = options.request_id == null ? undefined : requestClaims.get(options.request_id);
+            const resolved = await resolveRow(row, { loadSurface, agent, requestClaim });
             if (resolved.text == null) {
                 excluded.push({ id, code: resolved.code ?? 'LEPI_CONTROL_UNAVAILABLE' });
                 continue;
@@ -491,25 +648,26 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** 当前会话最近可用片段；可先限定作者及 beforeAt(ms)，再按 maxChars 整块裁剪。 */
-    async function recent(agent, options = {}) {
+    async function recent(agent: unknown, options: RecentEvidenceOptions = {}): Promise<{ sources: ResolvedEvidence[] }> {
         const sessionId = sessionIdOf(agent);
-        const maxChars = Number.isSafeInteger(options.maxChars) && options.maxChars > 0 ? options.maxChars : 0;
+        const maxChars = typeof options.maxChars === 'number' && Number.isSafeInteger(options.maxChars) && options.maxChars > 0 ? options.maxChars : 0;
         if (!sessionId || maxChars === 0) return { sources: [] };
         if (options.beforeAt !== undefined && !Number.isFinite(options.beforeAt)) return { sources: [] };
-        let rows = [];
+        let rows: Array<{ id: string }>;
         try {
-            rows = sql().recent.all(sessionId, RECENT_SCAN_LIMIT);
+            rows = sql().recent.all(sessionId, RECENT_SCAN_LIMIT) as Array<{ id: string }>;
         } catch {
             rows = [];
         }
         rows.reverse(); // 升序（旧 → 新）
         const { sources } = await read(rows.map((row) => row.id), { agent, signal: options.signal });
-        const kept = [];
+        const kept: ResolvedEvidence[] = [];
         let used = 0;
         for (let i = sources.length - 1; i >= 0; i -= 1) {
             const source = sources[i];
+            if (!source) continue;
             if (options.actor !== undefined && source.actor !== options.actor) continue;
-            if (options.beforeAt !== undefined && Date.parse(source.at) > options.beforeAt) continue;
+            if (options.beforeAt !== undefined && Date.parse(source.at ?? '') > options.beforeAt) continue;
             if (used + source.text.length > maxChars) break; // 整块取舍
             used += source.text.length;
             kept.push(source);
@@ -519,11 +677,11 @@ export function createEvidenceIndex({ store, sessionQuery } = {}) {
     }
 
     /** Step 9 集成缝：注入精确 isReadable(ref)；传 null 清除（回到本地保守判定）。 */
-    function setReadableGate(fn) {
+    function setReadableGate(fn: ((ref: EvidenceRef) => unknown) | null): void {
         gate = typeof fn === 'function' ? fn : null;
     }
 
-    function dispose() {
+    function dispose(): void {
         bodies.clear();
         mediaFlags.clear();
         firstSplice.clear();
