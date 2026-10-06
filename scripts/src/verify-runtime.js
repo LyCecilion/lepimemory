@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { openStore } from '../../dsh/plugins/dsh-lepimemory-state/lib/store.js';
-import { initialState } from '../../dsh/plugins/dsh-lepimemory-state/lib/state.js';
+import { initialState } from '../../dsh/plugins/dsh-lepimemory-state/lib/shared/state.js';
 import { NODE_VERSION } from '../../dsh/plugins/dsh-lepimemory-state/lib/shared/pins.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');

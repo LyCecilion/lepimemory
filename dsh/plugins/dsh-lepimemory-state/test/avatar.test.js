@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { AVATAR_ASSETS } from '../lib/avatar-assets.js';
-import { initialState, toneOf, nearOf } from '../lib/state.js';
+import { AVATAR_ASSETS } from '../lib/shared/avatar-assets.js';
+import { initialState, toneOf, nearOf } from '../lib/shared/state.js';
 
 const AVATAR_DIR = fileURLToPath(new URL('../assets/avatar/', import.meta.url));
 const KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;

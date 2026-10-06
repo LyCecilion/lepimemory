@@ -23,8 +23,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decayMood } from "./machine.js";
-import { AVATAR_ASSETS } from "./avatar-assets.js";
-import { NUMERIC_FIELDS, renderState, toneOf, nearOf, validateState } from "./state.js";
+import { AVATAR_ASSETS } from "./shared/avatar-assets.js";
+import { NUMERIC_FIELDS, renderState, toneOf, nearOf, validateState } from "./shared/state.js";
 import { SCHEMA_VERSION } from "./store.js";
 import { NODE_VERSION } from "./shared/pins.js";
 

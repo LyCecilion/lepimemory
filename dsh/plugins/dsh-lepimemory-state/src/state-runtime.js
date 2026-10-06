@@ -35,7 +35,7 @@
  *   不臆造整轮事实。
  */
 import { advance, decayMood } from './machine.js';
-import { renderState } from './state.js';
+import { renderState } from './shared/state.js';
 
 /** 审批/控制类工具：其（即使 isError 的）结果绝不折算成工具失败。 */
 const DEFAULT_CONTROL_TOOLS = new Set(['manage_memory']);

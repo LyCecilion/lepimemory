@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { initialState, validateState } from './state.js';
+import { initialState, validateState } from './shared/state.js';
 
 export const SCHEMA_VERSION = 1;
 const HISTORY_KINDS = new Map(['audit', 'recall', 'retain', 'forget', 'action', 'control', 'consent', 'task'].map(kind => [kind, kind]));

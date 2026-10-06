@@ -80,3 +80,6 @@ export const AVATAR_ASSETS = Object.freeze({
     'trash': '垃圾桶.gif',
     'nosetouch': '摸头.gif',
 });
+
+/** 清单键名的封闭联合：所有引用立绘键的类型都以此为唯一权威。 */
+export type AvatarKey = keyof typeof AVATAR_ASSETS;

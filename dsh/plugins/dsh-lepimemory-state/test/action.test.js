@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { randomUUID, createHash } from 'node:crypto';
 import { openStore } from '../lib/store.js';
 import { installAction, recoverActions, toolResultInfo } from '../lib/action.js';
-import { initialState, renderState } from '../lib/state.js';
+import { initialState, renderState } from '../lib/shared/state.js';
 import { createStateRuntime } from '../lib/state-runtime.js';
 import { createEvidenceIndex } from '../lib/evidence.js';
 

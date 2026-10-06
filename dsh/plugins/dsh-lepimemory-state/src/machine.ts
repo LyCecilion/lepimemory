@@ -6,27 +6,48 @@
  *   - **模型文本不直接写状态**——只吃结构事件（用户是否说话、工具是否失败）；
  *   - 每次变更产出「前值→后值 + 命中规则」，由 state-runtime.js 原子结算及审计。
  */
-import { BASELINE, NUMERIC_FIELDS, STATE_CAUSES } from "./state.js";
+import { BASELINE, NUMERIC_FIELDS, STATE_CAUSES, type StateReason } from "./shared/state.js";
 
-const RANGE = new Map(NUMERIC_FIELDS.map(([p, lo, hi]) => [p, [lo, hi]]));
+const RANGE = new Map(NUMERIC_FIELDS.map(([p, lo, hi]) => [p, [lo, hi] as const]));
 
 /** 心境向基线回归的半衰期（ms）。relation 不自然衰减（DESIGN_NOTES §1.4）。 */
 const MOOD_HALF_LIFE_MS = 6 * 60 * 60 * 1000;
 
-function clamp(value, lo, hi) {
+function clamp(value: number, lo: number, hi: number): number {
     return Math.min(hi, Math.max(lo, value));
 }
 
 /** 四舍五入到 4 位小数——状态与审计是给人看的，避免 0.12000000000000001 这类噪声。 */
-function round4(value) {
+function round4(value: number): number {
     return Math.round(value * 1e4) / 1e4;
+}
+
+/** 一轮回合的结构事实（只吃结构事件，不读模型文本）。 */
+export interface RoundFacts {
+    userMessages: number;
+    actionSuccesses: number;
+    toolFailures: number;
+}
+
+interface MachineState {
+    mood: { valence: number; arousal: number; updatedAt: string };
+    relation: { trust: number; closeness: number; familiarity: number };
+    reasons: StateReason[];
+}
+
+interface Rule {
+    id: string;
+    why: string;
+    when: (facts: RoundFacts) => boolean;
+    deltas: Record<string, number>;
+    reason?: string;
 }
 
 /**
  * 规则集（定稿三条；量级经标定：单次行动成功/失败即跨渲染阈值 |Δ|≥0.10 → 一轮可见）。
  * 每条都写清「为什么存在」；新增规则请同样注释。
  */
-export const RULES = [
+export const RULES: readonly Rule[] = [
     {
         id: "interaction.familiarity",
         why: "本轮用户说过话 → 熟悉度累积（关系不衰减）。",
@@ -53,7 +74,10 @@ export const RULES = [
 ];
 
 /** 按经过时间把 mood 拉回基线；relation 不动。 */
-export function decayMood(mood, nowMs) {
+export function decayMood(
+    mood: { valence: number; arousal: number; updatedAt: string },
+    nowMs: number,
+): { valence: number; arousal: number; changed: boolean } {
     const last = Date.parse(mood.updatedAt);
     if (!Number.isFinite(last)) return { valence: mood.valence, arousal: mood.arousal, changed: false };
     const dt = Math.max(0, nowMs - last);
@@ -65,36 +89,44 @@ export function decayMood(mood, nowMs) {
     return { valence, arousal, changed };
 }
 
+/** 一轮推进的结果：是否变更、推进后的状态、命中规则、按字段的 [前, 后]。 */
+export interface AdvanceResult {
+    changed: boolean;
+    state: MachineState;
+    fired: string[];
+    changes: Record<string, [number, number]>;
+}
+
 /**
  * 推进一轮：先衰减、再套用命中规则。**纯函数**（不改入参）。
- * @returns {{ changed: boolean, state: object, fired: string[], changes: Record<string,[number,number]> }}
  */
-export function advance(state, facts, nowMs) {
+export function advance(state: MachineState, facts: RoundFacts, nowMs: number): AdvanceResult {
     const decayed = decayMood(state.mood, nowMs);
     const next = structuredClone(state);
     next.mood.valence = decayed.valence;
     next.mood.arousal = decayed.arousal;
 
-    const before = { ...state.mood, ...state.relation };
-    const fired = [];
-    const reasons = [];
+    const before = { ...state.mood, ...state.relation } as unknown as Record<string, number>;
+    const fired: string[] = [];
+    const reasons: StateReason[] = [];
     for (const rule of RULES) {
         if (!rule.when(facts)) continue;
         fired.push(rule.id);
         for (const [p, delta] of Object.entries(rule.deltas)) {
-            const [group, field] = p.split(".");
-            const [lo, hi] = RANGE.get(p);
-            next[group][field] = round4(clamp(next[group][field] + delta, lo, hi));
+            const [group, field] = p.split(".") as [string, string];
+            const [lo, hi] = RANGE.get(p)!;
+            const target = (next as unknown as Record<string, Record<string, number>>)[group]!;
+            target[field] = round4(clamp(target[field]! + delta, lo, hi));
         }
         if (rule.reason) {
             reasons.push({ dimension: "mood", text: rule.reason, at: new Date(nowMs).toISOString() });
         }
     }
 
-    const after = { ...next.mood, ...next.relation };
-    const changes = {};
+    const after = { ...next.mood, ...next.relation } as unknown as Record<string, number>;
+    const changes: Record<string, [number, number]> = {};
     for (const key of Object.keys(before)) {
-        if (Math.abs(before[key] - after[key]) > 1e-9) changes[key] = [round4(before[key]), round4(after[key])];
+        if (Math.abs(before[key]! - after[key]!) > 1e-9) changes[key] = [round4(before[key]!), round4(after[key]!)];
     }
 
     const changed = decayed.changed || fired.length > 0;

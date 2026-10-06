@@ -37,7 +37,10 @@ export const ErrorCodes = Object.freeze({
 
 /** 配置错误：带稳定 code 与出问题的字段名（不含 key 值）。 */
 export class ConfigError extends Error {
-    constructor(code, field = null, detail = null) {
+    declare readonly code: string;
+    declare readonly field: string | null;
+    declare readonly detail: string | null;
+    constructor(code: string, field: string | null = null, detail: string | null = null) {
         super(`${code}${field ? ` [${field}]` : ""}${detail ? `: ${detail}` : ""}`);
         this.name = "ConfigError";
         this.code = code;
@@ -45,6 +48,9 @@ export class ConfigError extends Error {
         this.detail = detail;
     }
 }
+
+/** 进程/文件环境快照（可为 undefined 表示缺省值）。 */
+export type Env = Record<string, string | undefined>;
 
 // ── 默认值（用户在 .env 里可覆盖；此处是唯一权威默认来源）────────────────
 export const DEFAULTS = Object.freeze({
@@ -89,13 +95,74 @@ export const ROUTES = Object.freeze({
     hindsight: "HINDSIGHT",
 });
 
+/** 共享连接（两端都空 = unconfigured）。 */
+export interface SharedConnection {
+    baseUrl: string;
+    apiKey: string;
+    configured: boolean;
+}
+/** 单路由连接（可继承共享组或成组 override）。 */
+export interface RouteConnection {
+    baseUrl: string;
+    apiKey: string;
+    configured: boolean;
+    source: "shared" | "override" | "unconfigured";
+    apiKeyEnv: string;
+}
+/** 已解析的单路由 LLM 配置。 */
+export interface LlmRoute extends RouteConnection {
+    envPrefix: string;
+    model: string;
+}
+/** 成对阈值（accept 必须大于 reject）。 */
+export interface ThresholdPair {
+    accept: number;
+    reject: number;
+}
+
+/** `resolveConfig` 的完整返回值。 */
+export interface LepiConfig {
+    configured: boolean;
+    connection: SharedConnection;
+    llm: {
+        role: LlmRoute;
+        process: LlmRoute;
+        controlFallback: LlmRoute;
+        hindsight: LlmRoute;
+    };
+    services: {
+        hindsight: { url: string };
+        laya: { url: string; apiKey: string; configured: boolean };
+    };
+    bank: string;
+    admissionBackend: string;
+    timeZone: string;
+    timeouts: { consentTimeoutMs: number; taskTtlMs: number; grantTtlMs: number };
+    inferenceHalfLifeMs: number;
+    limits: {
+        contextMaxChars: number;
+        evidenceMaxCalls: number;
+        processMaxTokens: number;
+        processTimeoutMs: number;
+        controlTimeoutMs: number;
+    };
+    layaThresholds: { durable: ThresholdPair; transient: ThresholdPair };
+    home: { dshHome: string; port: number };
+    retrieval: { embeddingsLocalModel: string; rerankerLocalModel: string; hfEndpoint: string };
+}
+
 // ── 读取/校验原语 ────────────────────────────────────────────────────
-function readString(env, key) {
+function readString(env: Env | undefined, key: string): string {
     const value = env ? env[key] : undefined;
     return typeof value === "string" ? value.trim() : "";
 }
 
-function positiveInt(env, key, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+function positiveInt(
+    env: Env,
+    key: string,
+    fallback: number,
+    { min = 1, max = Number.MAX_SAFE_INTEGER }: { min?: number; max?: number } = {},
+): number {
     const raw = readString(env, key);
     if (raw === "") return fallback;
     if (!/^[0-9]+$/.test(raw)) {
@@ -108,7 +175,7 @@ function positiveInt(env, key, fallback, { min = 1, max = Number.MAX_SAFE_INTEGE
     return value;
 }
 
-function unitNumber(env, key, fallback) {
+function unitNumber(env: Env, key: string, fallback: number): number {
     const raw = readString(env, key);
     if (raw === "") return fallback;
     const value = Number(raw);
@@ -121,18 +188,19 @@ function unitNumber(env, key, fallback) {
     return value;
 }
 
-function nonEmptyString(env, key, fallback) {
+function nonEmptyString(env: Env, key: string, fallback: string): string {
     const raw = readString(env, key);
     return raw === "" ? fallback : raw;
 }
 
-function expandHome(p) {
+/** 展开 `~` / `~/…` 为绝对 home 路径（其余原样返回）。 */
+export function expandHome(p: string): string {
     if (p === "~") return os.homedir();
     if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
     return p;
 }
 
-function timeZoneField(env, key, fallback) {
+function timeZoneField(env: Env, key: string, fallback: string): string {
     const value = readString(env, key) || fallback;
     try {
         new Intl.DateTimeFormat("en-US", { timeZone: value });
@@ -142,7 +210,7 @@ function timeZoneField(env, key, fallback) {
     return value;
 }
 
-function bankField(env, key, fallback) {
+function bankField(env: Env, key: string, fallback: string): string {
     const value = readString(env, key) || fallback;
     if (value === LEGACY_BANK) {
         throw new ConfigError(ErrorCodes.CONFIG_INVALID, key, "legacy bank rejected; use a v2 bank");
@@ -150,7 +218,7 @@ function bankField(env, key, fallback) {
     return value;
 }
 
-function admissionBackendField(env, key, fallback) {
+function admissionBackendField(env: Env, key: string, fallback: string): string {
     const value = readString(env, key) || fallback;
     if (!ADMISSION_BACKENDS.includes(value)) {
         throw new ConfigError(ErrorCodes.CONFIG_INVALID, key, `expected one of ${ADMISSION_BACKENDS.join(", ")}`);
@@ -159,7 +227,7 @@ function admissionBackendField(env, key, fallback) {
 }
 
 /** 共享连接：两端都空 = unconfigured；只填一半 = CONNECTION_INCOMPLETE。 */
-function resolveSharedConnection(env) {
+function resolveSharedConnection(env: Env): SharedConnection {
     const baseUrl = readString(env, "LEPI_LLM_BASE_URL");
     const apiKey = readString(env, "LEPI_LLM_API_KEY");
     const hasUrl = baseUrl !== "";
@@ -175,7 +243,7 @@ function resolveSharedConnection(env) {
 }
 
 /** 单路由连接：未设置 → 继承共享组；设置 → 必须成组，否则 CONNECTION_INCOMPLETE。 */
-function resolveRouteConnection(env, envPrefix, shared) {
+function resolveRouteConnection(env: Env, envPrefix: string, shared: SharedConnection): RouteConnection {
     const urlKey = `LEPI_${envPrefix}_BASE_URL`;
     const keyKey = `LEPI_${envPrefix}_API_KEY`;
     const baseUrl = readString(env, urlKey);
@@ -201,7 +269,13 @@ function resolveRouteConnection(env, envPrefix, shared) {
     return { baseUrl, apiKey, configured: true, source: "override", apiKeyEnv: keyKey };
 }
 
-function validateThresholdPair(env, acceptKey, rejectKey, acceptDefault, rejectDefault) {
+function validateThresholdPair(
+    env: Env,
+    acceptKey: string,
+    rejectKey: string,
+    acceptDefault: number,
+    rejectDefault: number,
+): ThresholdPair {
     const accept = unitNumber(env, acceptKey, acceptDefault);
     const reject = unitNumber(env, rejectKey, rejectDefault);
     if (!(reject < accept)) {
@@ -213,23 +287,8 @@ function validateThresholdPair(env, acceptKey, rejectKey, acceptDefault, rejectD
 // ── 解析 ─────────────────────────────────────────────────────────────
 /**
  * 把 env 解析为运行时配置（纯函数；不读文件、不写回）。
- * @param {Record<string, string|undefined>} [env]
- * @returns {{
- *   configured: boolean,
- *   connection: {baseUrl: string, apiKey: string, configured: boolean},
- *   llm: {role: object, process: object, controlFallback: object, hindsight: object},
- *   services: {hindsight: {url: string}, laya: {url: string, apiKey: string, configured: boolean}},
- *   bank: string, admissionBackend: string, timeZone: string,
- *   timeouts: {consentTimeoutMs: number, taskTtlMs: number, grantTtlMs: number},
- *   inferenceHalfLifeMs: number,
- *   limits: {contextMaxChars: number, evidenceMaxCalls: number, processMaxTokens: number, processTimeoutMs: number, controlTimeoutMs: number},
- *   layaThresholds: {durable: {accept: number, reject: number}, transient: {accept: number, reject: number}},
- *   home: {dshHome: string, port: number},
- *   retrieval: {embeddingsLocalModel: string, rerankerLocalModel: string, hfEndpoint: string},
- * }}
- * @throws {ConfigError}
  */
-export function resolveConfig(env = process.env) {
+export function resolveConfig(env: Env = process.env): LepiConfig {
     const connection = resolveSharedConnection(env);
 
     const roleModel = nonEmptyString(env, "LEPI_ROLE_MODEL", DEFAULTS.roleModel);
@@ -305,7 +364,7 @@ export function resolveConfig(env = process.env) {
  * 内部 derived env：把**已解析**的每路由 key 暴露为稳定 env 名，供 dsh provider 的 apiKeyEnv 引用。
  * 只落进程内存，**绝不写回用户 .env**，也绝不进日志（用 redactConfig 记录配置）。
  */
-export function derivedEnv(config) {
+export function derivedEnv(config: LepiConfig) {
     return {
         LEPI_ROLE_API_KEY: config.llm.role.apiKey,
         LEPI_ROLE_BASE_URL: config.llm.role.baseUrl,
@@ -319,15 +378,15 @@ export function derivedEnv(config) {
 }
 
 /** 把 derived env 写入给定 env 对象（默认 process.env）；不落盘。 */
-export function applyDerivedEnv(env, config) {
+export function applyDerivedEnv(env: Env, config: LepiConfig): Env {
     Object.assign(env, derivedEnv(config));
     return env;
 }
 
 /** 生成不含 key 的配置快照，供日志/审计。永不输出 key 值。 */
-export function redactConfig(config) {
-    const mask = (v) => (typeof v === "string" && v !== "" ? "***" : "");
-    const route = (r) => ({ ...r, apiKey: mask(r.apiKey) });
+export function redactConfig(config: LepiConfig) {
+    const mask = (v: string): string => (typeof v === "string" && v !== "" ? "***" : "");
+    const route = (r: LlmRoute) => ({ ...r, apiKey: mask(r.apiKey) });
     return {
         configured: config.configured,
         connection: { ...config.connection, apiKey: mask(config.connection.apiKey) },
@@ -360,20 +419,27 @@ const LEGACY_MAP = Object.freeze([
     { from: "HINDSIGHT_API_LLM_BASE_URL", to: "LEPI_HINDSIGHT_BASE_URL" },
     { from: "HINDSIGHT_API_LLM_API_KEY", to: "LEPI_HINDSIGHT_API_KEY" },
     { from: "HINDSIGHT_API_LLM_MODEL", to: "LEPI_HINDSIGHT_MODEL" },
-]);
+]) as ReadonlyArray<{ from: string; to: string }>;
 /** 旧 key → 删除（新 schema 无对应字段）。 */
-const LEGACY_DROP = Object.freeze(["HINDSIGHT_API_LLM_PROVIDER"]);
-const LEGACY_KEYS = new Set([...LEGACY_MAP.map((m) => m.from), ...LEGACY_DROP]);
+const LEGACY_DROP: readonly string[] = Object.freeze(["HINDSIGHT_API_LLM_PROVIDER"]);
+const LEGACY_KEYS = new Set<string>([...LEGACY_MAP.map((m) => m.from), ...LEGACY_DROP]);
 
 const KEY_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 
-function lineKeys(text) {
-    const keys = new Set();
+function lineKeys(text: string): Set<string> {
+    const keys = new Set<string>();
     for (const line of text.split(/\r?\n/)) {
-        const m = line.match(KEY_RE);
-        if (m) keys.add(m[1]);
+        const found = line.match(KEY_RE)?.[1];
+        if (found) keys.add(found);
     }
     return keys;
+}
+
+/** 一次性迁移旧 `.env` 的结果。 */
+export interface LegacyMigrationResult {
+    migrated: boolean;
+    backupPath: string | null;
+    missingFields: string[];
 }
 
 /**
@@ -385,12 +451,10 @@ function lineKeys(text) {
  *   - endpoint 缺失只报告**字段名**（不猜地址、不输出值）；
  *   - 迁移后旧 key 名不再存在（正常解析也不支持旧别名）。
  * 幂等：无旧 key 时不改动、不备份。
- * @param {{envFile?: string, now?: number}} [options]
- * @returns {{migrated: boolean, backupPath: string|null, missingFields: string[]}}
  */
-export function migrateLegacyEnv({ envFile = null, now = Date.now() } = {}) {
+export function migrateLegacyEnv({ envFile = null, now = Date.now() }: { envFile?: string | null; now?: number } = {}): LegacyMigrationResult {
     const file = envFile || DEFAULT_ENV_FILE;
-    const result = { migrated: false, backupPath: null, missingFields: [] };
+    const result: LegacyMigrationResult = { migrated: false, backupPath: null, missingFields: [] };
     if (!fs.existsSync(file)) return result;
 
     const text = fs.readFileSync(file, "utf8");
@@ -398,14 +462,14 @@ export function migrateLegacyEnv({ envFile = null, now = Date.now() } = {}) {
     if (![...LEGACY_KEYS].some((k) => present.has(k))) return result;
 
     const taken = new Set([...present].filter((k) => !LEGACY_KEYS.has(k)));
-    const outLines = [];
+    const outLines: string[] = [];
     for (const line of text.split(/\r?\n/)) {
         const m = line.match(KEY_RE);
         if (!m) {
             outLines.push(line);
             continue;
         }
-        const key = m[1];
+        const key = m[1]!;
         if (LEGACY_DROP.includes(key)) continue;
         const map = LEGACY_MAP.find((x) => x.from === key);
         if (!map) {
@@ -440,16 +504,23 @@ export function migrateLegacyEnv({ envFile = null, now = Date.now() } = {}) {
     return result;
 }
 
+/** 显式 env 加载结果。 */
+export interface EnvLoadResult {
+    file: string;
+    loaded: boolean;
+    migrated: boolean;
+    backupPath: string | null;
+    missingFields: string[];
+}
+
 // ── 显式 env 加载器 ──────────────────────────────────────────────────
 /**
  * 加载可选 `.env`：先迁移旧文件，再用 `process.loadEnvFile` 载入；
  * **已有进程环境优先**（载入后回填快照，不被文件覆盖）。
- * @param {{envFile?: string, env?: Record<string,string|undefined>, migrate?: boolean, now?: number}} [options]
- * @returns {{file: string, loaded: boolean, migrated: boolean, backupPath: string|null, missingFields: string[]}}
  */
-export function loadEnvFile({ envFile = null, env = process.env, migrate = true, now = Date.now() } = {}) {
+export function loadEnvFile({ envFile = null, env = process.env, migrate = true, now = Date.now() }: { envFile?: string | null; env?: Env; migrate?: boolean; now?: number } = {}): EnvLoadResult {
     const file = envFile || readString(env, "LEPI_ENV_FILE") || DEFAULT_ENV_FILE;
-    const result = { file, loaded: false, migrated: false, backupPath: null, missingFields: [] };
+    const result: EnvLoadResult = { file, loaded: false, migrated: false, backupPath: null, missingFields: [] };
 
     if (migrate) {
         const m = migrateLegacyEnv({ envFile: file, now });
@@ -459,7 +530,7 @@ export function loadEnvFile({ envFile = null, env = process.env, migrate = true,
     }
     if (!fs.existsSync(file)) return result;
 
-    const preserved = new Map();
+    const preserved = new Map<string, string | undefined>();
     for (const key of Object.keys(process.env)) preserved.set(key, process.env[key]);
     process.loadEnvFile(file);
     for (const [key, value] of preserved) process.env[key] = value; // 已有环境优先
