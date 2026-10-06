@@ -894,15 +894,8 @@ window.__ModuleLoader__.load({
         )
       }
 
-      function renderEntry(e, i) {
-        const key = e.id != null ? `e${e.id}` : `${e.at}-${i}`
-        const isOpen = !!expanded[key]
-        const legacy = !!(e.data && e.data.legacy)
-        const badge = React.createElement(
-          'span',
-          { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` },
-          statusLabel(t, e.status, legacy),
-        )
+      /** 一条 entry 的来源引用与重试按钮（溯源块的内容）。 */
+      function buildRefs(e) {
         const refs = []
         const pushRef = (label, value) => { if (value != null && value !== '') refs.push(kv(label, value)) }
         pushRef(t('refSession'), e.session_id)
@@ -931,7 +924,30 @@ window.__ModuleLoader__.load({
         const retryButtons = []
         if (e.request_id) retryButtons.push(React.createElement('button', { key: 'rq', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`request:${e.request_id}`], onClick: () => doRetry('request', e.request_id) }, t('retryRequest')))
         if (e.task_id) retryButtons.push(React.createElement('button', { key: 'tk', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`task:${e.task_id}`], onClick: () => doRetry('task', e.task_id) }, t('retryTask')))
-        const hasDetail = refs.length > 0 || !!e.candidate_id || retryButtons.length > 0
+        return { refs, retryButtons, hasDetail: refs.length > 0 || !!e.candidate_id || retryButtons.length > 0 }
+      }
+      /** 一条 entry 的完整溯源块：来源引用 + 候选快照/生命周期 + 回忆来源链 + 重试。 */
+      function detailBlock(e, built) {
+        return React.createElement(
+          'div',
+          { className: 'lep-detail' },
+          built.refs,
+          e.candidate_id ? renderCandidate(e.candidate_id) : null,
+          renderRecall(e.data, e.id),
+          built.retryButtons,
+        )
+      }
+
+      function renderEntry(e, i) {
+        const key = e.id != null ? `e${e.id}` : `${e.at}-${i}`
+        const isOpen = !!expanded[key]
+        const legacy = !!(e.data && e.data.legacy)
+        const badge = React.createElement(
+          'span',
+          { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` },
+          statusLabel(t, e.status, legacy),
+        )
+        const built = buildRefs(e)
         const intent = INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')
         const excerpt = e.candidate_id ? excerptOf(cand[e.candidate_id]) : null
         return React.createElement(
@@ -942,25 +958,29 @@ window.__ModuleLoader__.load({
           badge,
           excerpt ? React.createElement('span', { className: 'lep-excerpt' }, excerpt) : null,
           debug ? React.createElement('span', { className: 'lep-rawsum' }, e.summary || '') : null,
-          hasDetail
+          built.hasDetail
             ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
             : null,
-          isOpen
-            ? React.createElement('div', { className: 'lep-detail' }, refs, e.candidate_id ? renderCandidate(e.candidate_id) : null, renderRecall(e.data, e.id), retryButtons)
-            : null,
+          isOpen ? detailBlock(e, built) : null,
         )
       }
 
-      /** 折叠行内的一条「阶段」：只留时间 · 状态 · 意图，不带任何 ID。 */
+      /** 折叠行内的一条「阶段」：时间 · 状态 · 意图 + 自己的「详情」（溯源/重试，不带 ID 噪音在主行）。 */
       function renderStage(e, i) {
-        const key = e.id != null ? `s${e.id}` : `${e.at}-${i}`
+        const key = e.id != null ? `e${e.id}` : `${e.at}-${i}`
+        const isOpen = !!expanded[key]
         const legacy = !!(e.data && e.data.legacy)
+        const built = buildRefs(e)
         return React.createElement(
           'li',
           { key, className: 'lep-row lep-row--stage' },
           React.createElement('time', null, fmtTime(e.at)),
           React.createElement('span', { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` }, statusLabel(t, e.status, legacy)),
           React.createElement('span', { className: 'lep-intent' }, INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')),
+          built.hasDetail
+            ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
+            : null,
+          isOpen ? detailBlock(e, built) : null,
         )
       }
 
