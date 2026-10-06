@@ -98,6 +98,41 @@ window.__ModuleLoader__.load({
       return 'idle'
     }
 
+    /** 客户端镜像 lib/state.js 的 BASELINE（面板 meter 的基线刻度；两边同时改）。 */
+    const BASELINE = { valence: 0, arousal: 0.4, trust: 0.3, closeness: 0.2, familiarity: 0.1 }
+
+    /** 历史分组：4 组各自拥有其 kinds 子标签。 */
+    const GROUPS = [
+      { id: 'memory', key: 'grp_memory', kinds: ['recall', 'retain', 'forget'] },
+      { id: 'action', key: 'grp_action', kinds: ['action', 'task'] },
+      { id: 'why', key: 'grp_why', kinds: ['audit', 'control'] },
+      { id: 'privacy', key: 'grp_privacy', kinds: ['consent'] },
+    ]
+    const KIND_LABEL = new Map(KINDS)
+
+    /** 活动 → 状态条色配（复用现有徽章色）。 */
+    const ACT_CLASS = { idle: 'muted', think: 'warn', speak: 'warn', tool: 'warn', approval: 'ok', question: 'ok', error: 'err' }
+
+    /** 一条带基线刻度的数值 meter（valence 取 -1..1，其余 0..1）。 */
+    function Meter({ label, value, lo, hi, baseline }) {
+      const number = typeof value === 'number' && Number.isFinite(value)
+      const clamp = (x) => Math.max(0, Math.min(100, x))
+      const pct = number ? clamp(((value - lo) / (hi - lo)) * 100) : 0
+      const basePct = clamp(((baseline - lo) / (hi - lo)) * 100)
+      return React.createElement(
+        'span',
+        { className: 'lep-meter', title: `${label} ${number ? value : '—'}` },
+        React.createElement('span', { className: 'lep-meter__label' }, label),
+        React.createElement(
+          'span',
+          { className: 'lep-meter__track' },
+          React.createElement('span', { className: 'lep-meter__fill', style: { width: pct + '%' } }),
+          React.createElement('span', { className: 'lep-meter__base', style: { left: basePct + '%' } }),
+        ),
+        React.createElement('span', { className: 'lep-meter__value' }, number ? value.toFixed(2) : '—'),
+      )
+    }
+
     /**
      * 真实 store 状态 → 本地化文案 key。缺省显示原始状态串（绝不当作成功）。
      * 覆盖 plan 明确的枚举 + store 里实际会用到的其余枚举。
@@ -162,7 +197,6 @@ window.__ModuleLoader__.load({
       '  line-height: 1.5; white-space: pre-wrap; color: var(--dsw-alias-text-secondary, #8a8f98);',
       '  background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.06));',
       '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.2)); border-radius: 8px; }',
-      '.lep-state__meta { margin-top: 4px; opacity: 0.75; }',
       '.lep-hist { margin-top: 6px; border-top: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.2)); padding-top: 4px; }',
       '.lep-hist__head { cursor: pointer; user-select: none; }',
       '.lep-hist__tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }',
@@ -207,6 +241,29 @@ window.__ModuleLoader__.load({
       '.lep-avatar { position: fixed; right: 14px; bottom: 14px; width: 128px; height: 128px; pointer-events: none; z-index: 35; }',
       '.lep-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 240ms ease; }',
       '.lep-avatar img.is-on { opacity: 1; }',
+      '.lep-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }',
+      '.lep-strip__group { display: inline-flex; align-items: center; gap: 8px; }',
+      '.lep-strip__grouplabel { opacity: 0.65; }',
+      '.lep-strip__summary { flex-basis: 100%; white-space: normal; opacity: 0.85; }',
+      '.lep-meter { display: inline-flex; align-items: center; gap: 4px; }',
+      '.lep-meter__label { opacity: 0.8; }',
+      '.lep-meter__track { position: relative; display: inline-block; width: 52px; height: 6px; border-radius: 3px;',
+      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); vertical-align: middle; }',
+      '.lep-meter__fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;',
+      '  background: var(--dsw-alias-text-secondary, #8a8f98); }',
+      '.lep-meter__base { position: absolute; top: -1px; bottom: -1px; width: 1px; opacity: 0.6;',
+      '  background: var(--dsw-alias-text-secondary, #8a8f98); }',
+      '.lep-meter__value { opacity: 0.7; min-width: 30px; }',
+      '.lep-badges { margin-top: 4px; }',
+      '.lep-act { font-size: 11px; padding: 0 6px; border-radius: 5px;',
+      '  border: 1px solid var(--dsw-alias-border-subtle, rgba(127,127,127,0.3)); }',
+      '.lep-act--ok { color: #2e7d32; border-color: #2e7d32; }',
+      '.lep-act--warn { color: #a06a00; border-color: #a06a00; }',
+      '.lep-act--err { color: #c62828; border-color: #c62828; }',
+      '.lep-act--muted { opacity: 0.7; }',
+      '.lep-raw { margin-top: 4px; white-space: normal; }',
+      '.lep-raw summary { cursor: pointer; user-select: none; opacity: 0.75; }',
+      '.lep-raw__body { white-space: pre-wrap; margin-top: 2px; }',
     ].join('\n')
 
     /** 状态 → 文案（legacy 记录加历史后缀；未知状态原样展示，绝不显示为成功）。 */
@@ -341,10 +398,11 @@ window.__ModuleLoader__.load({
     }
 
     /** 面板组件：状态经共享 feed 刷新；历史面板可折叠、按 kind 切换、翻页；支持详情/重试/操作者编辑。 */
-    function Panel({ t, useLepState, refreshLepState }) {
+    function Panel({ t, useLepState, refreshLepState, sessionId, useSessionStatus, useSession, useChat }) {
       const [s, setS] = React.useState(null)
       const [open, setOpen] = React.useState(false)
-      const [kind, setKind] = React.useState('audit')
+      const [group, setGroup] = React.useState('memory')
+      const [kind, setKind] = React.useState('recall')
       const [offset, setOffset] = React.useState(0)
       const [hist, setHist] = React.useState(null)
       const [histTick, setHistTick] = React.useState(0)
@@ -361,6 +419,13 @@ window.__ModuleLoader__.load({
       const candAbort = React.useRef(new Map())
       const receiptsRef = React.useRef(new Map())
       const privateEpoch = React.useRef(0)
+
+      // 活动信号：审批/提问 > 运行中（tool/speak/think）> 出错 > 待机。
+      const status = useSessionStatus((map) => (sessionId ? map.get(sessionId) : undefined))
+      const agentError = useSession((sess) => (sess ? sess.lastAgentError : null))
+      const useChatSafe = typeof useChat === 'function' ? useChat : () => null
+      const chatSignal = useChatSafe((cs) => deriveChatSignal(cs))
+      const activity = resolveActivity(status, chatSignal, agentError)
 
       function clearPrivate() {
         privateEpoch.current += 1
@@ -758,23 +823,53 @@ window.__ModuleLoader__.load({
       const pages = Math.max(1, Math.ceil(total / PAGE))
       const page = Math.floor(offset / PAGE) + 1
 
-      const metaParts = []
-      metaParts.push(`${t('mood')} ${s.mood ? `${s.mood.valence}/${s.mood.arousal}` : '—'}`)
-      metaParts.push(`${t('relation')} ${s.relation ? `${s.relation.trust}/${s.relation.closeness}/${s.relation.familiarity}` : '—'}`)
-      if (s.updatedAt) metaParts.push(String(s.updatedAt))
-      if (s.core != null) metaParts.push(`${t('core')}=${s.core ? 'ok' : '—'}`)
-      if (s.status && typeof s.status === 'object') {
-        const bits = []
-        if (s.status.running != null) bits.push(`running=${!!s.status.running}`)
-        if (s.status.tasks != null) bits.push(`tasks=${JSON.stringify(s.status.tasks)}`)
-        if (s.status.total != null) bits.push(`total=${s.status.total}`)
-        if (s.status.last_error) bits.push(`last_error=${s.status.last_error}`)
-        if (bits.length) metaParts.push(bits.join(' '))
-      }
-      if (s.counts && typeof s.counts === 'object') {
-        const bits = Object.keys(s.counts).map((k) => `${k}=${JSON.stringify(s.counts[k])}`)
-        if (bits.length) metaParts.push(`${t('counts')} ${bits.join(' ')}`)
-      }
+      const moodMeters = React.createElement(
+        'span',
+        { className: 'lep-strip__group' },
+        React.createElement('span', { className: 'lep-strip__grouplabel' }, t('mood')),
+        React.createElement(Meter, { label: t('valence'), value: s.mood ? s.mood.valence : undefined, lo: -1, hi: 1, baseline: BASELINE.valence }),
+        React.createElement(Meter, { label: t('arousal'), value: s.mood ? s.mood.arousal : undefined, lo: 0, hi: 1, baseline: BASELINE.arousal }),
+      )
+      const relationMeters = React.createElement(
+        'span',
+        { className: 'lep-strip__group' },
+        React.createElement('span', { className: 'lep-strip__grouplabel' }, t('relation')),
+        React.createElement(Meter, { label: t('trust'), value: s.relation ? s.relation.trust : undefined, lo: 0, hi: 1, baseline: BASELINE.trust }),
+        React.createElement(Meter, { label: t('closeness'), value: s.relation ? s.relation.closeness : undefined, lo: 0, hi: 1, baseline: BASELINE.closeness }),
+        React.createElement(Meter, { label: t('familiarity'), value: s.relation ? s.relation.familiarity : undefined, lo: 0, hi: 1, baseline: BASELINE.familiarity }),
+      )
+      const tone = s.tone || 'plain'
+      const near = s.near === true
+      const activityClass = ACT_CLASS[activity] || 'muted'
+      const summary = t('strip_now') + '：' + t('tone_' + tone) + (near ? ' · ' + t('rel_near') : '') + ' · ' + t('act_' + activity)
+      const strip = React.createElement(
+        'div',
+        { className: 'lep-strip' },
+        moodMeters,
+        relationMeters,
+        React.createElement('span', { className: 'lep-act lep-act--' + activityClass }, t('act_' + activity)),
+        React.createElement('div', { className: 'lep-strip__summary' }, summary),
+      )
+
+      const counts = s.counts || {}
+      const badges = [
+        [t('badge_memories'), (counts.lifecycle && counts.lifecycle.active) || 0],
+        [t('badge_tasks'), ((counts.tasks && counts.tasks.queued) || 0) + ((counts.tasks && counts.tasks.running) || 0)],
+        [t('badge_grants'), (counts.grants && counts.grants.active) || 0],
+      ]
+      const badgesBlock = React.createElement(
+        'div',
+        { className: 'lep-badges' },
+        badges.map(([label, n]) => React.createElement('span', { key: label, className: 'lep-badge' }, `${label} ${n}`)),
+        s.core === false ? React.createElement('span', { className: 'lep-badge lep-badge--err' }, t('badge_core_bad')) : null,
+      )
+
+      const rawBlock = React.createElement(
+        'details',
+        { className: 'lep-raw' },
+        React.createElement('summary', null, t('stateRaw')),
+        React.createElement('div', { className: 'lep-raw__body' }, s.rendered),
+      )
 
       const receiptsBlock = receipts.length
         ? React.createElement(
@@ -797,7 +892,23 @@ window.__ModuleLoader__.load({
             React.createElement(
               'div',
               { className: 'lep-hist__tabs' },
-              KINDS.map(([k, key]) =>
+              GROUPS.map((g) =>
+                React.createElement(
+                  'button',
+                  {
+                    key: g.id,
+                    type: 'button',
+                    className: 'lep-tab' + (g.id === group ? ' lep-tab--on' : ''),
+                    onClick: () => { setGroup(g.id); setKind(g.kinds[0]); setOffset(0) },
+                  },
+                  t(g.key),
+                ),
+              ),
+            ),
+            React.createElement(
+              'div',
+              { className: 'lep-hist__tabs' },
+              (GROUPS.find((g) => g.id === group) || GROUPS[0]).kinds.map((k) =>
                 React.createElement(
                   'button',
                   {
@@ -806,7 +917,7 @@ window.__ModuleLoader__.load({
                     className: 'lep-tab' + (k === kind ? ' lep-tab--on' : ''),
                     onClick: () => { setKind(k); setOffset(0) },
                   },
-                  t(key),
+                  t(KIND_LABEL.get(k) || k),
                 ),
               ),
             ),
@@ -855,8 +966,9 @@ window.__ModuleLoader__.load({
       return React.createElement(
         'div',
         { className: 'lep-state' },
-        s.rendered,
-        React.createElement('div', { className: 'lep-state__meta' }, metaParts.join(' · ')),
+        strip,
+        badgesBlock,
+        rawBlock,
         receiptsBlock,
         React.createElement(
           'div',
@@ -1000,8 +1112,28 @@ window.__ModuleLoader__.load({
         operations: '操作',
         grants: '授权',
         receipts: '系统回执',
-        core: '核心',
-        counts: '计数',
+        avatarAlt: '角色形象',
+        act_idle: '待机',
+        act_think: '思考中',
+        act_speak: '说话中',
+        act_tool: '执行工具中',
+        act_approval: '等待确认',
+        act_question: '等待回应',
+        act_error: '出错了',
+        grp_memory: '它记得什么',
+        grp_action: '它做了什么',
+        grp_why: '它为什么这样',
+        grp_privacy: '授权与隐私',
+        badge_memories: '记忆有效',
+        badge_tasks: '待处理任务',
+        badge_grants: '有效授权',
+        badge_core_bad: '核心异常',
+        strip_now: '此刻',
+        tone_bright: '心情明亮',
+        tone_plain: '心情平稳',
+        tone_low: '心情偏低落',
+        rel_near: '对你更亲近',
+        stateRaw: '模型实际读到的内部状态',
         refSession: '会话',
         refTurn: '轮次',
         refStep: '步骤',
@@ -1101,8 +1233,28 @@ window.__ModuleLoader__.load({
         operations: 'Operations',
         grants: 'Grants',
         receipts: 'System receipts',
-        core: 'Core',
-        counts: 'Counts',
+        avatarAlt: 'Character sprite',
+        act_idle: 'Idle',
+        act_think: 'Thinking',
+        act_speak: 'Speaking',
+        act_tool: 'Running a tool',
+        act_approval: 'Waiting for confirmation',
+        act_question: 'Waiting for your answer',
+        act_error: 'Error',
+        grp_memory: 'What it remembers',
+        grp_action: 'What it did',
+        grp_why: 'Why it changed',
+        grp_privacy: 'Consent & privacy',
+        badge_memories: 'Active memories',
+        badge_tasks: 'Pending tasks',
+        badge_grants: 'Active grants',
+        badge_core_bad: 'Core not ready',
+        strip_now: 'Now',
+        tone_bright: 'in good spirits',
+        tone_plain: 'steady',
+        tone_low: 'a little low',
+        rel_near: 'warmer toward you',
+        stateRaw: 'Raw internal state the model sees',
         refSession: 'Session',
         refTurn: 'Turn',
         refStep: 'Step',
