@@ -14,14 +14,17 @@ const KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * mirror of client.js AVATAR_FRAMES — 两边同时改；它只用于保证前端引用的键都能在素材清单里找到。
  */
 const CLIENT_FRAME_KEYS = [
-    'angry', 'bell', 'bubble', 'button', 'celebrate', 'cheer', 'cheers', 'clueless', 'clown', 'cry',
-    'daze', 'dead', 'greet', 'idea', 'jailed', 'knock', 'loading', 'megaphone', 'nosetouch', 'press',
-    'question', 'shades', 'sleep', 'trash', 'type', 'type-annoyed', 'work', 'work-angry', 'work-tired',
+    'angry', 'bell', 'blink', 'bubble', 'button', 'celebrate', 'cheese', 'cheer', 'cheers', 'clueless',
+    'clown', 'cry', 'cry2', 'crowbar', 'daze', 'dead', 'dizzy', 'expect', 'glowstick', 'greet', 'heart',
+    'idea', 'idle-pngtuber', 'jailed', 'jailed1', 'knock', 'laugh', 'lick', 'loading', 'magic', 'megaphone',
+    'nervous', 'nod', 'nosetouch', 'press', 'question', 'record', 'rose', 'shades', 'shocked', 'shy',
+    'sleep', 'stop', 'sweat', 'think', 'trash', 'type', 'type-angry', 'type-annoyed', 'work', 'work-angry',
+    'work-tired',
 ];
 
-test('清单是 29 项且键名形状合法', () => {
+test('清单是 62 项且键名形状合法', () => {
     const keys = Object.keys(AVATAR_ASSETS);
-    assert.equal(keys.length, 29);
+    assert.equal(keys.length, 62);
     for (const key of keys) assert.match(key, KEY_RE, `非法 key：${key}`);
     assert.equal(new Set(keys).size, keys.length, '存在重复 key');
 });

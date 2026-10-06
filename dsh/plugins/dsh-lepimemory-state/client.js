@@ -40,17 +40,46 @@ window.__ModuleLoader__.load({
     ]
 
     /**
-     * 立绘差分候选表：活动 → 基调 → 候选 key（按序取第一个加载成功者）。
+     * 立绘差分候选表：活动 → 基调 → 候选 key（按序：首选加载失败才取下一个）。
      * idle 另有 `near`（关系亲近）候选组。所有 key 必须存在于 host 的 AVATAR_ASSETS 清单。
      */
     const AVATAR_FRAMES = {
-      idle: { bright: ['celebrate', 'cheers'], plain: ['work', 'daze'], low: ['daze', 'sleep'], near: ['greet', 'nosetouch'] },
-      think: { bright: ['idea', 'cheer'], plain: ['idea', 'loading', 'question'], low: ['clueless', 'question'] },
-      speak: { bright: ['megaphone', 'bubble'], plain: ['type', 'megaphone'], low: ['type-annoyed', 'type'] },
-      tool: { bright: ['shades', 'knock'], plain: ['work', 'shades', 'type'], low: ['work-tired', 'work-angry'] },
-      approval: { bright: ['press', 'bell'], plain: ['question', 'button', 'bell'], low: ['jailed', 'trash'] },
-      question: { bright: ['press', 'question'], plain: ['question', 'button'], low: ['clueless', 'question'] },
-      error: { bright: ['clown', 'dead'], plain: ['angry', 'dead'], low: ['cry', 'trash'] },
+      idle: {
+        bright: ['laugh', 'celebrate', 'cheers'],
+        plain: ['idle-pngtuber', 'work', 'blink'],
+        low: ['daze', 'sleep', 'sweat'],
+        near: ['nosetouch', 'heart', 'greet', 'rose', 'lick'],
+      },
+      think: {
+        bright: ['think', 'idea', 'cheer'],
+        plain: ['think', 'idea', 'loading'],
+        low: ['clueless', 'dizzy', 'question'],
+      },
+      speak: {
+        bright: ['glowstick', 'megaphone', 'bubble'],
+        plain: ['type', 'megaphone', 'nod'],
+        low: ['type-annoyed', 'type-angry', 'type'],
+      },
+      tool: {
+        bright: ['magic', 'shades', 'knock'],
+        plain: ['record', 'work', 'shades'],
+        low: ['work-tired', 'work-angry', 'crowbar'],
+      },
+      approval: {
+        bright: ['expect', 'press', 'bell'],
+        plain: ['question', 'expect', 'button'],
+        low: ['jailed', 'jailed1', 'nervous'],
+      },
+      question: {
+        bright: ['expect', 'press', 'question'],
+        plain: ['question', 'expect', 'button'],
+        low: ['clueless', 'shocked', 'shy'],
+      },
+      error: {
+        bright: ['clown', 'cheese'],
+        plain: ['stop', 'angry', 'dead'],
+        low: ['cry', 'cry2', 'trash'],
+      },
     }
     /** 活动 → 候选 key 列表；idle 且关系亲近时，把近亲候选置顶。 */
     function avatarCandidates(activity, tone, near) {
@@ -58,8 +87,10 @@ window.__ModuleLoader__.load({
       const toneList = table[tone] || table.plain
       return activity === 'idle' && near === true ? [...table.near, ...toneList] : toneList
     }
-    const AVATAR_PRELOAD_KEYS = Array.from(new Set(Object.values(AVATAR_FRAMES)
-      .flatMap((t) => Object.values(t)).flat()))
+    /** 预热每个 (活动, 基调) 的首选帧（含 idle 的 near 首选）；列表其余项是加载失败回退，按需再取。 */
+    const AVATAR_PRELOAD_KEYS = Array.from(new Set(
+      Object.values(AVATAR_FRAMES).flatMap((table) => Object.values(table).map((list) => list[0])),
+    ))
     const avatarSrc = (k) => '/lepimemory/avatar?key=' + encodeURIComponent(k)
 
     /**
