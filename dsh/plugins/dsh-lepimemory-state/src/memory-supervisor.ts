@@ -4,10 +4,8 @@
  * 本模块不 import pipeline，保持 import 图有向无环。
  */
 import { randomUUID } from 'node:crypto';
-import type { StatementSync } from 'node:sqlite';
 import { parseJson } from './json.js';
 import {
-  allRows,
   BACKOFF,
   GENERIC_CODE,
   errorCodeOf,
@@ -98,10 +96,6 @@ interface SupervisorDeps {
   runRemote(signal: AbortSignal, prefer: 'curate' | 'write'): Promise<boolean>;
 }
 
-interface Statements {
-  windowIds: StatementSync;
-}
-
 export function createSupervisor({
   store,
   taskStore,
@@ -116,7 +110,6 @@ export function createSupervisor({
   runTask,
   runRemote,
 }: SupervisorDeps): Supervisor {
-  const db = store.db;
   const turnStarts = new Map<string, TurnStart>(); // sessionId -> { turn, seq }
   const controllers = new Map<string, AbortController>(); // taskId -> AbortController
   let tickTimer: NodeJS.Timeout | null = null;
@@ -127,14 +120,6 @@ export function createSupervisor({
   let preferCurate = true;
   let currentTaskId: string | null = null;
   let ownerId: string | null = null; // 懒生成：lease owner 标识
-  let sql: Statements | null = null;
-
-  function statements(): Statements {
-    return (sql ??= {
-      windowIds: db.prepare(`SELECT id, actor FROM evidence WHERE session_id=? AND kind<>'splice'
-          AND actor IN ('user','assistant','action') AND seq>? AND seq<=? ORDER BY seq, block_index`),
-    });
-  }
 
   function leaseOwner(): string {
     return (ownerId ??= `${process.pid}-${randomUUID()}`);
@@ -267,12 +252,7 @@ export function createSupervisor({
     toSeq: number,
   ): Array<{ id: string; actor: string }> {
     try {
-      return allRows<{ id: string; actor: string }>(
-        statements().windowIds,
-        sessionId,
-        fromSeq,
-        toSeq,
-      );
+      return evidence.turnWindow(sessionId, fromSeq, toSeq);
     } catch (error) {
       setError(errorCodeOf(error) ?? GENERIC_CODE);
       return [];

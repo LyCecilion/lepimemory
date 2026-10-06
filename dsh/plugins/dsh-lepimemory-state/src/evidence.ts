@@ -248,6 +248,11 @@ export interface EvidenceIndex {
     options?: ReadEvidenceOptions,
   ): Promise<{ sources: ResolvedEvidence[]; excluded: ExcludedEvidence[] }>;
   recent(agent: unknown, options?: RecentEvidenceOptions): Promise<{ sources: ResolvedEvidence[] }>;
+  turnWindow(
+    sessionId: string,
+    fromSeq: number,
+    toSeq: number,
+  ): Array<{ id: string; actor: string }>;
   setReadableGate(gate: ((ref: EvidenceRef) => unknown) | null): void;
   dispose(): void;
 }
@@ -264,6 +269,7 @@ interface PreparedStatements {
   earliestSplice: StatementSync;
   hasCommitted: StatementSync;
   recent: StatementSync;
+  windowIds: StatementSync;
 }
 interface ActiveClaim {
   turn: number;
@@ -333,6 +339,10 @@ export function createEvidenceIndex({
         `SELECT id FROM evidence WHERE session_id=? AND kind<>'splice'
              AND actor IN ('user','assistant','action')
              ORDER BY seq DESC, block_index DESC LIMIT ?`,
+      ),
+      windowIds: db.prepare(
+        `SELECT id, actor FROM evidence WHERE session_id=? AND kind<>'splice'
+             AND actor IN ('user','assistant','action') AND seq>? AND seq<=? ORDER BY seq, block_index`,
       ),
     });
 
@@ -830,6 +840,15 @@ export function createEvidenceIndex({
     return { sources: kept };
   }
 
+  /** 只读：取某会话 (fromSeq, toSeq] 区间内 user/assistant/action 的真实已交付证据 id。 */
+  function turnWindow(
+    sessionId: string,
+    fromSeq: number,
+    toSeq: number,
+  ): Array<{ id: string; actor: string }> {
+    return sql().windowIds.all(sessionId, fromSeq, toSeq) as Array<{ id: string; actor: string }>;
+  }
+
   /** Step 9 集成缝：注入精确 isReadable(ref)；传 null 清除（回到本地保守判定）。 */
   function setReadableGate(fn: ((ref: EvidenceRef) => unknown) | null): void {
     gate = typeof fn === 'function' ? fn : null;
@@ -854,6 +873,7 @@ export function createEvidenceIndex({
     advanceClaim,
     read,
     recent,
+    turnWindow,
     setReadableGate,
     dispose,
   };
