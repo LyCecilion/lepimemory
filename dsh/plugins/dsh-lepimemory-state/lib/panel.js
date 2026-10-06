@@ -16,9 +16,14 @@
  *   - `GET  /lepimemory/history?kind=&limit=&offset=`    操作者；审计分页（真实 status + 摘要元数据）
  *   - `GET  /lepimemory/candidate?id=&reveal=`           操作者；已获准快照/生命周期/来源引用（无 heap 回退）
  *   - `POST /lepimemory/retry`                           操作者；按既有身份唤醒 request/task（不新开 operation）
+ *   - `GET  /lepimemory/avatar?key=`                     操作者；提供 assets/avatar/ 下清单内的立绘 GIF
  */
+import fs from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { decayMood } from "./machine.js";
+import { AVATAR_ASSETS } from "./avatar-assets.js";
 import { NUMERIC_FIELDS, renderState, validateState } from "./state.js";
 import { SCHEMA_VERSION } from "./store.js";
 
@@ -40,6 +45,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** 操作者调整状态的固定原因（不接受自由文本原因）。 */
 const OPERATOR_CAUSE = "操作者调整演示状态";
 const RESUBMIT_CODE = "LEPI_INPUT_RESUBMIT_REQUIRED";
+
+/** 立绘素材目录（相对本模块解析，随插件 link 一起被 $DSH_HOME profile 引用）。 */
+const AVATAR_DIR = fileURLToPath(new URL("../assets/avatar/", import.meta.url));
+/** 立绘 key 形状：短、小写、可带连字符；只有清单内的 key 才会被读取。 */
+const AVATAR_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** 惰性 Buffer 缓存：素材在进程内不可变，命中即不再读盘。 */
+const avatarCache = new Map();
 
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const shortId = (id) => (typeof id === "string" && id.length > 8 ? id.slice(0, 8) : String(id ?? ""));
@@ -470,10 +482,49 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                 },
             };
 
-            disposers.push(server.register(stateRoute), server.register(historyRoute), server.register(candidateRoute), server.register(retryRoute));
+            /**
+             * 立绘素材路由：只按清单内的 key 提供 `assets/avatar/` 下的 GIF。
+             * 与其它数据路由同样走共享 connection 鉴权；未鉴权请求在读取任何素材之前被拒。
+             */
+            const avatarRoute = {
+                kind: "exact",
+                path: "/lepimemory/avatar",
+                handler: (req, res) => {
+                    if (rejected(res, connection, req)) return;
+                    if (req.method !== "GET") return methodNotAllowed(res, ["GET"]);
+                    const key = new URL(req.url ?? "/", "http://localhost").searchParams.get("key") ?? "";
+                    if (!AVATAR_KEY_RE.test(key) || !(key in AVATAR_ASSETS)) {
+                        sendJson(res, 404, { ok: false, error: "not_found" });
+                        return;
+                    }
+                    try {
+                        let buffer = avatarCache.get(key);
+                        if (!buffer) {
+                            buffer = fs.readFileSync(path.join(AVATAR_DIR, AVATAR_ASSETS[key]));
+                            avatarCache.set(key, buffer);
+                        }
+                        res.writeHead(200, {
+                            "content-type": "image/gif",
+                            "cache-control": "private, max-age=86400",
+                            "content-length": buffer.length,
+                        });
+                        res.end(buffer);
+                    } catch {
+                        sendJson(res, 500, { ok: false, error: "LEPI_AVATAR_UNAVAILABLE" });
+                    }
+                },
+            };
+
+            disposers.push(
+                server.register(stateRoute),
+                server.register(historyRoute),
+                server.register(candidateRoute),
+                server.register(retryRoute),
+                server.register(avatarRoute),
+            );
         }
 
         scope.effect(() => () => { for (const dispose of disposers) dispose(); }, "lepimemory.panel.routes()");
-        logger.info("面板路由已装载：/lepimemory/health、state、history、candidate、retry");
+        logger.info("面板路由已装载：/lepimemory/health、state、history、candidate、retry、avatar");
     });
 }

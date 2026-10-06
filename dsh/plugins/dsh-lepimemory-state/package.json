@@ -14,7 +14,8 @@
     "files": [
         "lib",
         "client.js",
-        "cordis.patch.yml"
+        "cordis.patch.yml",
+        "assets"
     ],
     "dependencies": {
         "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
