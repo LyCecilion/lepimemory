@@ -37,7 +37,21 @@ export default [
       'no-empty': ['error', { allowEmptyCatch: true }],
       'no-unused-vars': [
         'error',
-        { argsIgnorePattern: '^_', caughtErrors: 'all', caughtErrorsIgnorePattern: '^_' },
+        {
+          argsIgnorePattern: '^_',
+          caughtErrors: 'all',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
+      ],
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          caughtErrors: 'all',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
       ],
     },
   },
@@ -46,7 +60,12 @@ export default [
     files: ['**/*.ts', '**/*.tsx', '**/*.mts'],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        project: [
+          './dsh/plugins/dsh-lepimemory-state/tsconfig.json',
+          './dsh/plugins/dsh-lepimemory-state/src/client/tsconfig.json',
+          './scripts/tsconfig.json',
+          './scripts/tsconfig.tools.json',
+        ],
         tsconfigRootDir: import.meta.dirname,
         ecmaFeatures: { jsx: true },
       },
@@ -66,7 +85,12 @@ export default [
       '@typescript-eslint/no-misused-promises': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',
-        { argsIgnorePattern: '^_', caughtErrors: 'all', caughtErrorsIgnorePattern: '^_' },
+        {
+          argsIgnorePattern: '^_',
+          caughtErrors: 'all',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+        },
       ],
     },
   },

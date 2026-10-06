@@ -44,7 +44,6 @@ import {
 } from "../../dsh/plugins/dsh-lepimemory-state/lib/config.js";
 import {
     NODE_VERSION,
-    PNPM_VERSION,
     DSH_VERSION,
 } from "../../dsh/plugins/dsh-lepimemory-state/lib/shared/pins.js";
 
