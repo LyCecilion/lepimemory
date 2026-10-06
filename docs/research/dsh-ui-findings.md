@@ -1,8 +1,11 @@
 # dsh UI 改造调研报告（DeepSeek Harness · Web GUI）
 
+> **历史证据 · 非当前工作流**：本文是基于**只读源码审阅**（参考仓库无 `node_modules`、无构建产物）的研究，**不是实机运行**；结论与 `[INFERENCE]` 标记按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1.3、§6.3。
+> ⚠️ 与现状的差异：dsh UI / slot 体系可能随后演进，本文的运行态结论不能当作实测；本插件的客户端现状以 `src/client/index.tsx` 为准。
+
 > 整理：Agent 会话，2026-09-29（v0.2）。基于**只读源码审阅**（`Workspace/external/deepseek-harness` @ `0.1.7-rc.2`，commit `21638c56`）与 `Workspace/external/dsh-ads` 案例分析。
 > **未做本机实机运行**：参考仓库无 `node_modules`、无构建产物（`apps/web/dist`、`packages/client/*/lib/client.js` 均不存在），故运行态结论以文档/源码互证为准，凡属推断均标 `[INFERENCE]`。
-> 关联：`CONCEPTS.md`（决策一 / §Phase 4 状态外化 / §Phase 5 实时交流）、`docs/research/dsh-findings.md`（部署实机）、`/home/lycecilion/Workspace/external/dsh-ads`（外挂插件实例）。
+> 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1.3、§6.3；部署实机见 `docs/research/dsh-findings.md`；外挂插件实例 `/home/lycecilion/Workspace/external/dsh-ads`。
 
 ## TL;DR
 

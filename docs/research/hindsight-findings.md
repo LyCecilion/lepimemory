@@ -1,8 +1,11 @@
 # Hindsight 接入与行为实测报告
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-28 的 Hindsight 接入实测结论（运行版 0.10.0），原始数字见 `hindsight-measurements.md`，按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §4–§5。
+> ⚠️ 与现状的差异：早期「遗忘＝`invalidate` 可无损 revert」与「observation 一律按 fact、不衰减」都已被取代；现行遗忘/来源语义见 ARCHITECTURE §5。
+
 > 整理：Agent 会话，2026-09-28。基于本机 Fedora 实机验证。
 > 运行实例 API **0.10.0**，参考仓库 `/home/lycecilion/Workspace/external/hindsight` 为 **0.10.1**（有轻微版本差）。
-> 关联：`CONCEPTS.md` §2 决策二 / §6.5、`DESIGN_NOTES.md` §4、`HANDOFF.md` Phase 2。
+> 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1、§4、§5。
 > 本文只写**结论与决策**；**原始实测数字**见 `docs/research/hindsight-measurements.md`。
 > ⚠️ 本文不含真实个人记忆内容；所有示例均为合成测试数据（bank 名 `lepi-test` / `qingning` 等）。
 

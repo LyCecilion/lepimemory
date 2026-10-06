@@ -1,5 +1,8 @@
 # Phase 3 行动工具 `write_note` — 证据（真实副作用 + 审批 + experience + 失败进状态）
 
+> **历史证据 · 非当前工作流**：本文是 2026-10-03 行动工具 `write_note` 的证据，源码位置（`lib/action.js`）为**当时位置**（现为 `src/action.ts`），采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §6.2。
+> ⚠️ 与现状的差异：早期 `tool.failure.dampen` 的 `relation.trust −0.04` **已删除**；现失败只降 `valence`、不降 trust。
+
 - 日期：2026-10-03
 - 分支：`develop`
 - 模块：`lib/action.js`（新，`write_note` 工具）+ `lib/index.js`（状态机收 `actionSuccesses`）+ `lib/memory.js`（experience 写路径）+ `lib/machine.js`（`action.success.brighten` 规则）

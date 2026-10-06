@@ -1,5 +1,8 @@
 # Phase 3 记忆写路径（retain）—— 证据
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29 记忆写路径 v1 的证据，源码位置（`lib/*.js`）为**当时位置**，采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §3–§4。
+> ⚠️ 与现状的差异：fire-and-forget `retain`、`retain.jsonl` 审计与朴素「写入判断」已被**理解 / 逐候选准入 / 授权 / 不可变快照 / 可核实写入**管线取代。
+
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 模块：`lib/memory.js`（写路径）+ `lib/hindsight.js`（client.retain）

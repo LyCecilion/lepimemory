@@ -1,5 +1,8 @@
 # Phase 3 第一步验收证据 — 状态从硬编码换成持久化存储（路 B）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29「路 B：`state.json`」的验收证据，按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1。
+> ⚠️ 与现状的差异：现行状态落**单一 SQLite**（`state` 表 + 同事务审计），**不再读写 `state.json`**；本文描述的路径/文件与补丁写法已不适用。
+
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 插件：`@dsh-external/dsh-lepimemory-state`（`dsh/plugins/dsh-lepimemory-state/`）

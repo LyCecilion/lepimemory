@@ -1,5 +1,8 @@
 # Phase 3 状态机证据（v1 → v2）— 事件驱动 + 衰减 + 自有审计 + 量级标定
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29/10-03 状态机 v1→v2 的证据，规则表按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §6.1。
+> ⚠️ 与现状的差异：**下表 `tool.failure.dampen` 的 `relation.trust −0.04` 已删除**——失败不再降低信任，普通失败只降 `valence`。
+
 - 日期：2026-09-29（v2 标定与规则定稿：2026-10-03）
 - 分支：`exp/state-persistence`（2026-10-03 并入 `develop` → `main`）
 - 插件：`@dsh-external/dsh-lepimemory-state`（`lib/index.js` 装配；`lib/state.js` schema/渲染/读写；`lib/machine.js` 状态机）

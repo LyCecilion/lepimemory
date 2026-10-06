@@ -25,7 +25,7 @@ import type {
   Origin,
 } from './shared/domain.js';
 
-// ── laya 0.3.26 锁定值（PLAN Step 2 / deploy/laya/server.py：Router models + revisions）。──────
+// ── laya 0.3.26 锁定值（deploy/laya/server.py：Router models + revisions）。──────
 // 这些是显式锁定值，不是运行期从服务探测出来的；laya 服务与 config 均按此固定。
 export const LAYA_MODEL = 'multilingual';
 export const LAYA_REVISION = '1720e3e3357cfe1e281542e223f8273b0890ca34';
@@ -39,7 +39,7 @@ export const MAX_RELATED = 3;
 const RELATED_SCAN = 32;
 
 /**
- * laya 的 `should_store` noul 指令（PLAN Step 6 原文；只描述长期价值，不含授权）。
+ * laya 的 `should_store` noul 指令（只描述长期价值，不含授权）。
  */
 const INSTRUCTIONS =
   '这条候选是否值得在以记忆为核心的长期陪伴角色中保存？保留稳定事实、偏好、明确约定及重要关系或经历；' +

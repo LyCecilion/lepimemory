@@ -1,5 +1,8 @@
 # Phase 3 状态面板 — 证据（client 插件 + 自定义 HTTP 路由）
 
+> **历史证据 · 非当前工作流**：本文是 2026-10-03 状态面板的证据，源码位置（`lib/panel.js` / `client.js`）为**当时位置**，采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §1.3、§6.3。
+> ⚠️ 与现状的差异：早期面板读 `state.json` / `*.jsonl` 并自建 loopback Host/Origin 信任栅栏；现行走共享 `connection` 鉴权（401/403）+ 单一 SQLite。
+
 - 日期：2026-10-03
 - 分支：`develop`
 - 模块：`lib/panel.js`（Host 侧路由）+ `client.js`（浏览器半）+ `lib/index.js` 装配 + `package.json`（`dsh.client`/`exports`/`files`）

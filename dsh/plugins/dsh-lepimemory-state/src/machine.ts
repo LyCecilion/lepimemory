@@ -1,7 +1,7 @@
 /**
  * 状态机：把「发生的事」折算成状态增量 + 心境衰减。
  *
- * 原则（CONCEPTS §2 决策三 / DESIGN_NOTES §1.6）：
+ * 原则：
  *   - 规则是**显式数据**，纯函数 (facts) -> deltas，可列举、可测、可审；
  *   - **模型文本不直接写状态**——只吃结构事件（用户是否说话、工具是否失败）；
  *   - 每次变更产出「前值→后值 + 命中规则」，由 state-runtime.js 原子结算及审计。
@@ -10,7 +10,7 @@ import { BASELINE, NUMERIC_FIELDS, STATE_CAUSES, type StateReason } from './shar
 
 const RANGE = new Map(NUMERIC_FIELDS.map(([p, lo, hi]) => [p, [lo, hi] as const]));
 
-/** 心境向基线回归的半衰期（ms）。relation 不自然衰减（DESIGN_NOTES §1.4）。 */
+/** 心境向基线回归的半衰期（ms）。relation 不自然衰减（仅操作者显式调整）。 */
 const MOOD_HALF_LIFE_MS = 6 * 60 * 60 * 1000;
 
 function clamp(value: number, lo: number, hi: number): number {

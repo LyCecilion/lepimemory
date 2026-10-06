@@ -1,5 +1,8 @@
 # Phase 3 记忆召回竖切 —— 证据（recall → 归因 → 注入 → 审计）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29 Phase 3 召回竖切的证据，机制名与源码位置（`lib/*.js`）为**当时位置**，采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §5.1。
+> ⚠️ 与现状的差异：早期 `recall.jsonl` 审计、`agent/pre-step` 手搓注入与分数归因，现由单一 SQLite 的**政策投影**（先政策、再分数）取代。
+
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 插件：`@dsh-external/dsh-lepimemory-state`（新模块 `lib/hindsight.js` 客户端 + `lib/memory.js` 记忆桥）

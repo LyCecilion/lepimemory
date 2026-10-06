@@ -1,11 +1,11 @@
 /**
- * Lepimemory 运行时配置（Step 1）。
+ * Lepimemory 运行时配置。
  *
  * 单一职责：把用户环境（.env / process env / 明确命令行值）解析成一份**显式、可校验**的
  * 运行时配置对象；外加一次性的旧 `.env` 迁移与显式 env 加载器。不启动任何服务、不注册 hook、
  * 不写回用户文件（derived env 只落在进程内存）。
  *
- * 关键约定（对应 PLAN Step 1 / 需求表）：
+ * 关键约定：
  *   - `resolveConfig(env=process.env)` 是**纯函数**：只读 env，不碰文件、不产生副作用。
  *   - 加载 `.env` 用 `process.loadEnvFile`（可选文件）；**已有进程环境优先**，不被文件覆盖。
  *   - 未配置 = 共享连接两端均为空；此时不得回落到任何默认官方 URL（fail-closed）。

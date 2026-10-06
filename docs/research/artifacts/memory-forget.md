@@ -1,5 +1,8 @@
 # Phase 3 遗忘（forget）—— 证据（工具 + 审批，取代正则）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29/10-03 遗忘工具化的证据，源码位置（`lib/*.js`）为**当时位置**，采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §5.3–§5.4。
+> ⚠️ 与现状的差异：早期「遗忘＝`invalidate`（可 revert）」已改；现为**本地抑制 fence 先行 + canonical surface 隔离 + 远端整理另报**，不承诺可逆复原历史。
+
 - 日期：2026-09-29（工具化改造：2026-10-03）
 - 分支：`exp/state-persistence`（2026-10-03 并入 `develop` → `main`）
 - 模块：`lib/memory.js`（`forget` 工具）+ `lib/hindsight.js`（`invalidate`/`revert`）

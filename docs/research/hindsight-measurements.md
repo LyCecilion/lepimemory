@@ -1,5 +1,7 @@
 # Hindsight 实测数据（原始记录 · 附录）
 
+> **历史证据 · 非当前工作流**：本文只存 2026-09-28 的原始实测数字，供复盘/引用，采样按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §4–§5。
+
 > 配套文档：`docs/research/hindsight-findings.md`（结论与决策）、`dsh-findings.md`。
 > 本文件**只存实测数字**，供日后复盘/写 PPT 引用。日期：2026-09-28，本机 Fedora。
 > ⚠️ 不含真实个人记忆内容；示例均为合成测试 bank（`lepi-test` / `qingning`）。

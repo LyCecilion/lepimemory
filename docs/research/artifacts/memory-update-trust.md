@@ -1,7 +1,9 @@
 # 记忆更新 / 冲突 与 信任档衰减（Lv2）——设计、取舍与实测
 
+> **历史证据 · 非当前工作流**：本文是 2026-10-03 记忆更新/冲突与三档信任衰减的实测，源码位置为**当时位置**（现为 `src/trust.ts` 等），采样按原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §5.1–§5.2。
+
 > 2026-10-03。补齐 Lv2 记忆生命周期里两处缺口：**「更新 / 冲突」**（题目点名的「除了记住，还要考虑忘记和更新」）与**「事实·推断·经历」三档信任等级与差异化衰减**。
-> 关联：`CONCEPTS.md` §4.2、`DESIGN_NOTES.md` §4.2；实现见 `lib/trust.js` / `lib/hindsight.js` / `lib/memory.js`。
+> 关联：当时实现见 `lib/trust.js` / `lib/hindsight.js` / `lib/memory.js`（现为 `src/trust.ts` 等）。
 
 ## 1. 更新 / 冲突：用 Hindsight 的原生 supersede，我们只做「取最新」+ 可观测
 

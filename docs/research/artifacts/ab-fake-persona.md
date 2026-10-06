@@ -1,5 +1,8 @@
 # Phase 1 实验：状态注入 → 语气变化（A/B）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-28 Phase 1 的 A/B 证据（硬编码状态文本），按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §6.1。
+> ⚠️ 与现状的差异：当时的状态文本是硬编码；现由状态机/`renderState` 生成，且不再编辑 JSON 文件。
+
 - 日期：2026-09-28
 - 插件：`@dsh-external/dsh-lepimemory-state`（源码：`dsh/plugins/dsh-lepimemory-state/`）
 - 机制：插件把一个状态文本注册为 system prompt section（order 50）；

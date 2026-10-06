@@ -5,7 +5,7 @@
  */
 
 // ── 状态结构 ─────────────────────────────────────────────────────────
-// 初始值＝基线（先写死待实测），对齐 DESIGN_NOTES.md §1.4：先少而正交；mood 短期、relation 长期。
+// 初始值＝基线（数值待标定）；mood 短期、relation 长期，先少而正交。
 export const BASELINE = {
   valence: 0,
   arousal: 0.4,

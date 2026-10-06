@@ -1,7 +1,10 @@
 # dsh 实地调研报告（DeepSeek Harness · 0.1.7-rc.2）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-28 的 dsh 实机调研记录，采样与结论按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1–§2。
+> ⚠️ 与现状的差异：文中早期的启动/操作方式（全局 `dsh`、`!!js` 读端点、`make reset`、手工 env）**不是当前启动指南**；现行入口见 [README](../../README.md) 与 [dsh/README](../../dsh/README.md)。
+
 > 整理：Agent 会话，2026-09-28（v0.3）。基于本机 Fedora 实机验证，供 Lepimemory 部署与后续开发使用。
-> 关联：`CONCEPTS.md` §6.5（部署形态）、`HANDOFF.md`（阶段计划）。
+> 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1–§2。
 > 相关文件：`docs/research/artifacts/`（组合树快照）、`dsh/profiles/lepimemory/`（profile 草案）、仓库根目录部署脚手架。
 
 ## TL;DR

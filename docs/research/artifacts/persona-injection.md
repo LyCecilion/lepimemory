@@ -1,5 +1,7 @@
 # Phase 1 占位债清偿 — 正式人设注入（证据）
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29 Phase 1 人设注入的证据，按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §1.1。
+
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 机制：profile 的 preset `persona` 行（`@deepseek-ai/dsh-persona`）的 `prefix` 换成完整人设，

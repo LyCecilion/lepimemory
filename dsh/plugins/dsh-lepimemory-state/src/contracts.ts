@@ -26,7 +26,7 @@
  *   - 校验失败一律抛错（无成功回退）；grant/observation 的「无法判定」由父级在捕获 `ContractError`
  *     后自行映射为 uncertain / safe=false。
  *
- * 语义来源规则（对应 PLAN Step 4/8）：
+ * 语义来源规则：
  *   - origin=user：每个来源 actor 必须为 `user`。
  *   - origin=action：至少一个来源 actor=`action` 且 kind=`verified_action`；其余只能是 user/action。
  *   - origin=inference：每个来源 actor 必须为 `assistant`（只认公共 assistant 文本，不收 reasoning）。

@@ -1,8 +1,10 @@
 # 上下文管理（Lv1）——设计、取舍与实测
 
+> **历史证据 · 非当前工作流**：本文是 2026-10-03 上下文压缩（Lv1）的设计与实测，按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §1.1，页面/机制解释见 [MECHANISM](../../MECHANISM.md)。
+
 > 2026-10-03。补上 Lv1 唯一缺口：随历史增长，「上下文如何被保留 / 压缩 / 筛选 / 重组」。
 > 结论：**复用 dsh 的 compaction 后端（不重复造轮子），并把「为什么安全」的边界写死。**
-> 关联：`CONCEPTS.md` §3、`dsh-findings.md`；profile 改动见 `dsh/profiles/lepimemory/cordis.patch.yml`。
+> 关联：当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §1.1、[MECHANISM](../../MECHANISM.md)；profile 改动见 `dsh/profiles/lepimemory/cordis.patch.yml`。
 
 ## 1. 问题
 

@@ -20,9 +20,11 @@
 | Lv2：真实行动 | 原生审批、独立 UUID 便条文件、执行账本与状态结算；拒绝不冒充成功 |
 | 可观测性与审计 | 状态前后值、真实工具与文件、请求/任务回执、记忆来源链及操作者详情 |
 
-完成依据是既有 **93/93 行为检查与 SQLite CLI smoke**，以及实际 Web **D0–D7** 记录，见 [DEVLOG](docs/DEVLOG.md)。D8 完整独立验收已按用户要求收束；模型保守误判、限流与 `unknown` 仍如实呈现，不声称生产级全场景可靠性。Lv2.5 及更高等级不属于本轮交付。
+完成依据是实际 Web **D0–D7** 记录，以及行为检查 + SQLite CLI smoke，见 [DEVLOG](docs/DEVLOG.md)。其中 **93/93 是 2026-10-05 当时的历史记录**，不是当前数字；当前固定 `make verify` 实际输出为 **103/103 通过**（每次以命令输出为准）。D8 完整独立验收已按用户要求收束；模型保守误判、限流与 `unknown` 仍如实呈现，不声称生产级全场景可靠性。Lv2.5 及更高等级不属于本轮交付。
 
 ## 快速开始（评委自助）
+
+> 本机开发另有 [LOCAL_HANDOFF.md](LOCAL_HANDOFF.md)（固定 playground home/bank/端口）；那是**个人本机启动卡**，**验收一律用下面这类全新 fixture home/bank**，不要复用其中数据。
 
 前置：Docker（含 Compose v2）、make、Bash、curl、tar、OpenSSL 与 shasum。
 默认入口**不使用系统 Node 或全局 dsh/pnpm**：`make bootstrap` 校验并安装 Node **24.20.0** / pnpm **10.28.2**，根工作区锁定 dsh **0.1.7-rc.2**；后续只做 frozen install。
@@ -51,10 +53,10 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 
 | 路径 | 说明 |
 | --- | --- |
-| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/runtime.mjs` | 固定运行时入口：`bootstrap` / `install-profile` / `dev` / `verify`（`verify` 另跑 `scripts/verify-runtime.mjs` 与插件行为测试） |
-| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml` | 根工作区：锁定 Node/pnpm/dsh 版本与插件依赖（frozen install） |
+| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/src/runtime.ts`（生成 `scripts/dist/runtime.js`） | 固定运行时入口：`bootstrap` / `build` / `install-profile` / `dev` / `verify` / `typecheck` / `lint` / `format-check` / `check`（`verify` 另跑 `scripts/src/verify-runtime.ts` 生成的 `dist/verify-runtime.js` 与插件行为测试） |
+| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml` | 根工作区：锁定 Node/pnpm/dsh 版本与插件依赖（frozen install）；devDependencies 固定 TS/esbuild/prettier/eslint |
 | `dsh/profiles/lepimemory/` | profile 源（人设 + 能力面裁剪 + 隔离 realm）；由 launcher 复制并生成到 `$DSH_HOME` |
-| `dsh/plugins/dsh-lepimemory-state/` | 自研角色运行时插件（SQLite 状态/审计、控制、准入、记忆、历史、行动、面板） |
+| `dsh/plugins/dsh-lepimemory-state/src/` | 自研角色运行时插件**手写 TS/TSX 源码**（服务端 `src/*.ts`、浏览器安全 `src/shared/*.ts`、客户端 `src/client/**`）；`lib/`、`client.js` 为生成物 |
 | `deploy/hindsight/` · `deploy/laya/` | 两个固定记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型） |
 | `docker-compose.yml` | 记忆服务编排（仅 loopback 端口；复用既有同名数据/缓存卷） |
 | `docs/DEMO.md` · `docs/DEVLOG.md` | 当前演示剧本与开发日志 |
@@ -72,9 +74,11 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 
 ## 文档地图
 
+- `docs/ARCHITECTURE.md` — **唯一的现行架构说明**：职责边界、模块图、构建与产物政策、控制/授权、持久化与远程任务、召回/遗忘、状态/行动/立绘、边界与证据索引
 - `docs/MECHANISM.md` — 面向观众与演示者的机制导览：页面怎么看、幕后怎样工作、现场怎么讲
-- `CONCEPTS.md` — 已定的架构决策
-- `DESIGN_NOTES.md` — 正在形成的判断（含未解项）
-- `HANDOFF.md` — 收敛前的历史交接与原有计划记录；当前完成、启动与验收口径以本文、`docs/DEMO.md`、`docs/DEVLOG.md` 为准
-- `docs/DEVLOG.md` — 开发日志（工作全过程 + 踩坑台账）
+- `docs/DEMO.md` — 固定验收剧本 D0–D8 与诚实清单
+- `docs/DEVLOG.md` — 开发日志（工作全过程 + 踩坑台账 + 日期化历史）
+- `docs/research/` — 历史实测证据（dsh / Hindsight 调研与 artifact，非当前工作流）
+- `dsh/README.md` — 开发者指南：固定安装 → 构建 → 验证、源码/产物、SQL owner 与隔离 smoke
+- `LOCAL_HANDOFF.md` — **本机**启动说明（仅本机开发，不用于验收）
 - `CHALLENGE.md` — 题目原文

@@ -1,5 +1,7 @@
 # Spike 证据 — out-of-tree 插件能否追加自定义会话事件？
 
+> **历史证据 · 非当前工作流**：本文是 2026-09-29 的 spike 记录，结论（out-of-tree 不能追加自定义会话事件）**仍成立**，按当时原样保留。当前架构见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1。
+
 - 日期：2026-09-29
 - 分支：`exp/state-persistence`
 - 目标：验证「每轮往 session log 追加一条自定义持久化审计事件（计划名 `persona/state-diff`）」是否可行。
@@ -67,7 +69,7 @@ open(id,'write') FAILED: SessionAlreadyOwnedError: session "session-…" is alre
 
 ## 影响 / 决策
 
-- `CONCEPTS.md §5.3` 已改写为**分层落点**：
+- 审计落点随后改写为**分层落点**（现见 [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1）：
   - **效果**（模型看到什么）→ dsh 原生 `system/message` 的 Prompt Diff（已可回放）；
   - **原因**（为何变化）→ **插件自有持久化**（`<DSH_HOME>/lepimemory/audit.jsonl`）。
 - 原计划四个自研事件（`memory/recall` / `memory/retain` / `persona/state-diff` / `decision/attribution`）全部作废。
