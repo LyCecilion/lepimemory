@@ -12,7 +12,7 @@
  * 路由：
  *   - `GET  /lepimemory/health`                          公开只读 bool（launcher readiness）
  *   - `GET  /lepimemory/state`                           操作者；有效状态（衰减视图，不落库）+ 状态元数据
- *   - `POST /lepimemory/state`                           操作者；精确数值字段 → 固定原因 → 原子提交 + 完整审计
+ *   - `POST /lepimemory/state[?preview=1]`               操作者；精确数值字段 → 固定原因 → （preview=1 时只 dry-run 不落库）原子提交 + 完整审计
  *   - `GET  /lepimemory/history?kind=&limit=&offset=`    操作者；审计分页（真实 status + 摘要元数据）
  *   - `GET  /lepimemory/candidate?id=&reveal=`           操作者；已获准快照/生命周期/来源引用（无 heap 回退）
  *   - `POST /lepimemory/retry`                           操作者；按既有身份唤醒 request/task（不新开 operation）
@@ -24,7 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decayMood } from "./machine.js";
 import { AVATAR_ASSETS } from "./avatar-assets.js";
-import { NUMERIC_FIELDS, renderState, validateState } from "./state.js";
+import { NUMERIC_FIELDS, renderState, toneOf, nearOf, validateState } from "./state.js";
 import { SCHEMA_VERSION } from "./store.js";
 
 /** 固定的运行时 Node（与 scripts/runtime.mjs `NODE_VERSION` 一致）。 */
@@ -201,6 +201,8 @@ function statePayload(store, coordinator, at) {
     return {
         ok: true,
         rendered: renderState(effective, at),
+        tone: toneOf(effective),
+        near: nearOf(effective),
         mood: effective.mood,
         relation: effective.relation,
         updatedAt: effective.mood.updatedAt,
@@ -240,6 +242,30 @@ function parseIntParam(raw, def, min, max) {
     const n = Number(raw);
     if (!Number.isSafeInteger(n) || n < min || n > max) return null;
     return n;
+}
+
+/**
+ * 由当前状态与操作者输入算出**下一个状态对象**（纯函数：不落库、不写审计）。
+ * 提交与 dry-run 预览共用同一算法，保证「预览所见」就是「提交将写入」。
+ */
+function nextStateFrom(current, input, at) {
+    const next = structuredClone(current);
+    const moodChange = Math.abs(input.mood.valence - current.mood.valence) + Math.abs(input.mood.arousal - current.mood.arousal);
+    const relChange = Math.abs(input.relation.trust - current.relation.trust)
+        + Math.abs(input.relation.closeness - current.relation.closeness)
+        + Math.abs(input.relation.familiarity - current.relation.familiarity);
+    next.mood.valence = input.mood.valence;
+    next.mood.arousal = input.mood.arousal;
+    next.relation.trust = input.relation.trust;
+    next.relation.closeness = input.relation.closeness;
+    next.relation.familiarity = input.relation.familiarity;
+    next.mood.updatedAt = new Date(at).toISOString();
+    const dimension = relChange > moodChange ? "relation" : "mood";
+    next.reasons = [
+        { dimension, text: OPERATOR_CAUSE, at: new Date(at).toISOString() },
+        ...current.reasons,
+    ].slice(0, 10);
+    return next;
 }
 
 // ── 安装 ────────────────────────────────────────────────────────────
@@ -300,6 +326,7 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                         return;
                     }
                     if (req.method !== "POST") return methodNotAllowed(res, ["GET", "POST"]);
+                    const preview = new URL(req.url ?? "/", "http://localhost").searchParams.get("preview") === "1";
                     const read = await readJsonBody(req, res);
                     if (!read.ok) return;
                     const input = operatorInput(read.value);
@@ -307,22 +334,20 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                     const at = Date.now();
                     try {
                         const current = store.readState();
-                        const next = structuredClone(current);
-                        const moodChange = Math.abs(input.mood.valence - current.mood.valence) + Math.abs(input.mood.arousal - current.mood.arousal);
-                        const relChange = Math.abs(input.relation.trust - current.relation.trust)
-                            + Math.abs(input.relation.closeness - current.relation.closeness)
-                            + Math.abs(input.relation.familiarity - current.relation.familiarity);
-                        next.mood.valence = input.mood.valence;
-                        next.mood.arousal = input.mood.arousal;
-                        next.relation.trust = input.relation.trust;
-                        next.relation.closeness = input.relation.closeness;
-                        next.relation.familiarity = input.relation.familiarity;
-                        next.mood.updatedAt = new Date(at).toISOString();
-                        const dimension = relChange > moodChange ? "relation" : "mood";
-                        next.reasons = [
-                            { dimension, text: OPERATOR_CAUSE, at: new Date(at).toISOString() },
-                            ...current.reasons,
-                        ].slice(0, 10);
+                        const next = nextStateFrom(current, input, at);
+                        if (preview) {
+                            // dry-run：只算渲染与基调，绝不 commitState、绝不写审计。
+                            if (!validateState(next).ok) { sendJson(res, 500, { ok: false, error: "LEPI_STATE_INVALID" }); return; }
+                            sendJson(res, 200, {
+                                ok: true,
+                                preview: true,
+                                rendered: renderState(next, at),
+                                tone: toneOf(next),
+                                mood: next.mood,
+                                relation: next.relation,
+                            });
+                            return;
+                        }
                         if (!validateState(next).ok) { sendJson(res, 500, { ok: false, error: "LEPI_STATE_INVALID" }); return; }
                         store.commitState(next, { at, type: "control", status: "state_set", data: { operator: true } });
                         sendJson(res, 200, statePayload(store, coordinator, at));

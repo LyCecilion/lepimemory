@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { AVATAR_ASSETS } from '../lib/avatar-assets.js';
+import { initialState, toneOf, nearOf } from '../lib/state.js';
 
 const AVATAR_DIR = fileURLToPath(new URL('../assets/avatar/', import.meta.url));
 const KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -42,4 +43,23 @@ test('每个素材都是 112x112 的 GIF89a', () => {
 
 test('客户端 AVATAR_FRAMES 引用的每个 key 都在素材清单里', () => {
     for (const key of CLIENT_FRAME_KEYS) assert.ok(key in AVATAR_ASSETS, `客户端引用了未知 key：${key}`);
+});
+
+test('toneOf 在 MILD 边界分档，nearOf 以 closeness 高出基线一档为准', () => {
+    const at = (delta) => {
+        const state = initialState();
+        state.mood.valence = delta;
+        return toneOf(state);
+    };
+    assert.equal(at(0.10), 'bright');
+    assert.equal(at(0.05), 'plain');
+    assert.equal(at(-0.10), 'low');
+
+    const near = (closeness) => {
+        const state = initialState();
+        state.relation.closeness = closeness;
+        return nearOf(state);
+    };
+    assert.equal(near(0.30), true);
+    assert.equal(near(0.25), false);
 });
