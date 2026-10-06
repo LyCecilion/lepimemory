@@ -5,8 +5,7 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "jsx": "react",
     "types": [],
-    "allowJs": true,
-    "checkJs": false
+    "allowJs": false
   },
-  "include": ["./**/*.ts", "./**/*.tsx", "./**/*.js", "../shared/**/*.ts"]
+  "include": ["./**/*.ts", "./**/*.tsx", "../shared/**/*.ts"]
 }

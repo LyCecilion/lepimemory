@@ -14,6 +14,8 @@ scripts/dist/
 
 # Binary / vendored assets.
 dsh/plugins/dsh-lepimemory-state/assets/
+# Verbatim CSS text bundled by esbuild (`text` loader); not reformatted.
+dsh/plugins/dsh-lepimemory-state/src/client/panel.css
 
 # Frozen inputs: lockfile, historical evidence and the challenge statement.
 pnpm-lock.yaml

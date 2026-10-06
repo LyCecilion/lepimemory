@@ -16,6 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import type { Metafile } from 'esbuild';
 import { NODE_VERSION, PNPM_VERSION } from '../dsh/plugins/dsh-lepimemory-state/src/shared/pins.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,15 @@ const SCRIPTS_TOOLS_TSCONFIG = path.join(REPO_ROOT, 'scripts', 'tsconfig.tools.j
 const CLIENT_TSCONFIG = path.join(PLUGIN_DIR, 'src', 'client', 'tsconfig.json');
 
 const USAGE = 'usage: build.mts [--install | --typecheck]';
+
+/** Host client-module identity: the plugin package name (client-modules boot id). */
+const CLIENT_PLUGIN_ID = '@dsh-external/dsh-lepimemory-state';
+/** The only modules the host factory `require` can resolve (platform seeds). */
+const CLIENT_EXTERNALS: readonly string[] = [
+  'react',
+  'react-dom',
+  '@deepseek-ai/dsh-client-ui-primitives',
+];
 
 class BuildError extends Error {
   code: string;
@@ -122,26 +132,106 @@ function writeFileAtomic(file: string, content: string): void {
 }
 
 /**
- * Build the host client artifact. Phase-2 transitional step: copy the migrated
- * lazy-CJS entry verbatim. Phase 4 replaces this with the esbuild factory bundle
- * (no existence-based fallback survives the cutover).
+ * Read the plugin manifest and confirm the client module id is still the
+ * package name (client-modules uses it as the boot row id).
  */
-function buildClient(): void {
-  const entry = path.join(PLUGIN_DIR, 'src', 'client', 'index.js');
+function readClientPluginId(): string {
+  const manifestPath = path.join(PLUGIN_DIR, 'package.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { name?: unknown };
+  if (manifest.name !== CLIENT_PLUGIN_ID) {
+    throw new BuildError(
+      'LEPI_CLIENT_ID_MISMATCH',
+      `plugin package name is ${String(manifest.name)}, expected ${CLIENT_PLUGIN_ID}`,
+    );
+  }
+  return manifest.name;
+}
+
+/**
+ * Prove the bundle only reaches host seeds and its own browser-safe sources:
+ * the output's external imports are exactly the seed set, and every bundled
+ * input stays under `src/client/` or `src/shared/` (no node builtins, no
+ * server source, no bundled React runtime).
+ */
+function assertClientBundle(metafile: Metafile): void {
+  const outputKey = Object.keys(metafile.outputs)[0];
+  const output = outputKey ? metafile.outputs[outputKey] : undefined;
+  const externals = [
+    ...new Set(
+      (output?.imports ?? []).filter((imp) => imp.external === true).map((imp) => imp.path),
+    ),
+  ].sort();
+  const expected = [...CLIENT_EXTERNALS].sort();
+  if (externals.join('\n') !== expected.join('\n')) {
+    throw new BuildError(
+      'LEPI_CLIENT_EXTERNALS',
+      `expected ${expected.join(', ')}; got ${externals.join(', ') || '(none)'}`,
+    );
+  }
+  for (const input of Object.keys(metafile.inputs)) {
+    if (!input.startsWith('src/client/') && !input.startsWith('src/shared/')) {
+      throw new BuildError('LEPI_CLIENT_INPUT', `unexpected bundled input ${input}`);
+    }
+  }
+}
+
+/**
+ * Build the host client artifact: bundle the TSX entry with esbuild and wrap
+ * the CJS body in the exact `window.__ModuleLoader__.load({ id, factory })`
+ * envelope the host expects. A bundle/type failure exits non-zero, so
+ * `make dev` never serves a stale or failed client.
+ */
+async function buildClient(): Promise<void> {
+  const entry = path.join(PLUGIN_DIR, 'src', 'client', 'index.tsx');
   if (!fs.existsSync(entry)) {
     throw new BuildError('LEPI_CLIENT_ENTRY_MISSING', `${entry} not found`);
   }
-  writeFileAtomic(path.join(PLUGIN_DIR, 'client.js'), fs.readFileSync(entry, 'utf8'));
+  const pluginId = readClientPluginId();
+  const esbuild = await import('esbuild');
+  const banner = [
+    'window.__ModuleLoader__.load({',
+    `  id: ${JSON.stringify(pluginId)},`,
+    '  factory: (require) => {',
+    "    'use strict';",
+    '    var module = { exports: {} };',
+    '    var exports = module.exports;',
+  ].join('\n');
+  const footer = ['    return module.exports;', '  },', '});', ''].join('\n');
+  const result = await esbuild.build({
+    entryPoints: [entry],
+    absWorkingDir: PLUGIN_DIR,
+    bundle: true,
+    format: 'cjs',
+    platform: 'browser',
+    target: 'es2022',
+    jsx: 'transform',
+    jsxFactory: 'React.createElement',
+    jsxFragment: 'React.Fragment',
+    external: [...CLIENT_EXTERNALS],
+    loader: { '.css': 'text' },
+    minify: false,
+    charset: 'utf8',
+    write: false,
+    sourcemap: 'inline',
+    metafile: true,
+    banner: { js: banner },
+    footer: { js: footer },
+  });
+  const output = result.outputFiles?.[0];
+  if (!output)
+    throw new BuildError('LEPI_CLIENT_OUTPUT_MISSING', 'esbuild produced no output file');
+  assertClientBundle(result.metafile);
+  writeFileAtomic(path.join(PLUGIN_DIR, 'client.js'), output.text);
 }
 
-function build(): void {
+async function build(): Promise<void> {
   requireDependencies();
   cleanGenerated();
   runTsc(PLUGIN_TSCONFIG); // emits lib/*.js + *.d.ts (config.d.ts feeds scripts)
   runTsc(SCRIPTS_TSCONFIG); // emits scripts/dist
   runTsc(CLIENT_TSCONFIG); // browser noEmit
   runTsc(SCRIPTS_TOOLS_TSCONFIG); // build driver noEmit
-  buildClient();
+  await buildClient();
   info('build complete');
 }
 
@@ -154,16 +244,16 @@ function typecheck(): void {
   info('typecheck complete');
 }
 
-function main(argv: string[]): void {
+async function main(argv: string[]): Promise<void> {
   const flag = argv[0];
   assertPinnedNode();
   if (flag === undefined) {
-    build();
+    await build();
     return;
   }
   if (flag === '--install') {
     runFrozenInstall();
-    build();
+    await build();
     return;
   }
   if (flag === '--typecheck') {
@@ -174,9 +264,7 @@ function main(argv: string[]): void {
   process.exit(2);
 }
 
-try {
-  main(process.argv.slice(2));
-} catch (error) {
+main(process.argv.slice(2)).catch((error: unknown) => {
   if (error instanceof BuildError) {
     process.stderr.write(`lepimemory-build: ${error.message}\n`);
     process.exit(1);
@@ -185,4 +273,4 @@ try {
     `lepimemory-build: unexpected error: ${(error as Error)?.stack ?? String(error)}\n`,
   );
   process.exit(1);
-}
+});
