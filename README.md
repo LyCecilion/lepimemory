@@ -7,7 +7,7 @@
 
 **状态：Lv1/Lv2 已完成并收尾。** 当前单用户、单角色运行时已实现并完成切换（`RUNTIME_CONTRACT = 1`）：单一 SQLite 写入 + 不可变快照 + 统一审计、必经控制与权限确认、逐候选准入、获准快照写入可核对的 raw 来源、按现行政策投影 recall、canonical surface 遗忘/恢复、真实行动与状态审计；旧 JSON 状态/审计文件与 `memory.js` fire-and-forget 写入路径已删除，不保留兼容别名。
 
-> **验收边界**：11 项运行时实现及实际 Web D0–D7 已完成；按用户要求收束，D8 完整独立演示及额外后端比较不继续执行，**不宣称 D0–D8 全套通过**。真实证据、失败与边界见 `docs/DEMO.md`、`docs/DEVLOG.md`；`docs/research/` 保留为历史记录，非当前工作流。
+> **验收边界**：11 项运行时实现及实际 Web D0–D7 已完成；按用户要求收束，D8 完整独立演示及额外后端比较不继续执行，**不宣称 D0–D8 全套通过**。真实证据、失败与边界见 `docs/DEMO.md`、`docs/DEVLOG.md`；`docs/archive/` 保留为历史记录，非当前工作流。
 
 第一次看 Demo、想向别人解释页面和机制？先读 **[Lepimemory 怎么工作：机制与 Demo 页面导览](docs/MECHANISM.md)**：一分钟开场白、仪表盘读法、记忆/状态/行动闭环和逐屏讲解路线。
 
@@ -60,7 +60,7 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 | `deploy/hindsight/` · `deploy/laya/` | 两个固定记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型） |
 | `docker-compose.yml` | 记忆服务编排（仅 loopback 端口；复用既有同名数据/缓存卷） |
 | `docs/DEMO.md` · `docs/DEVLOG.md` | 当前演示剧本与开发日志 |
-| `docs/research/` | dsh 调研、Hindsight 实测报告与历史附录（历史记录） |
+| `docs/archive/` | dsh 调研、Hindsight 实测报告与历史附录（历史记录） |
 | `.env.example` | 环境变量样例（凭据留空；见下） |
 
 ## 配置（`.env.example`）
@@ -78,7 +78,7 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 - `docs/MECHANISM.md` — 面向观众与演示者的机制导览：页面怎么看、幕后怎样工作、现场怎么讲
 - `docs/DEMO.md` — 固定验收剧本 D0–D8 与诚实清单
 - `docs/DEVLOG.md` — 开发日志（工作全过程 + 踩坑台账 + 日期化历史）
-- `docs/research/` — 历史实测证据（dsh / Hindsight 调研与 artifact，非当前工作流）
+- `docs/archive/` — 历史实测证据（dsh / Hindsight 调研与 artifact，非当前工作流）
 - `dsh/README.md` — 开发者指南：固定安装 → 构建 → 验证、源码/产物、SQL owner 与隔离 smoke
 - `LOCAL_HANDOFF.md` — **本机**启动说明（仅本机开发，不用于验收）
 - `CHALLENGE.md` — 题目原文

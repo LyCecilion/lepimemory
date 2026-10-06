@@ -6,7 +6,7 @@
 > 整理：Agent 会话，2026-09-28。基于本机 Fedora 实机验证。
 > 运行实例 API **0.10.0**，参考仓库 `/home/lycecilion/Workspace/external/hindsight` 为 **0.10.1**（有轻微版本差）。
 > 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1、§4、§5。
-> 本文只写**结论与决策**；**原始实测数字**见 `docs/research/hindsight-measurements.md`。
+> 本文只写**结论与决策**；**原始实测数字**见 `docs/archive/hindsight-measurements.md`。
 > ⚠️ 本文不含真实个人记忆内容；所有示例均为合成测试数据（bank 名 `lepi-test` / `qingning` 等）。
 
 ## TL;DR

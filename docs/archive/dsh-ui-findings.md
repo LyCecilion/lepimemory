@@ -5,7 +5,7 @@
 
 > 整理：Agent 会话，2026-09-29（v0.2）。基于**只读源码审阅**（`Workspace/external/deepseek-harness` @ `0.1.7-rc.2`，commit `21638c56`）与 `Workspace/external/dsh-ads` 案例分析。
 > **未做本机实机运行**：参考仓库无 `node_modules`、无构建产物（`apps/web/dist`、`packages/client/*/lib/client.js` 均不存在），故运行态结论以文档/源码互证为准，凡属推断均标 `[INFERENCE]`。
-> 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1.3、§6.3；部署实机见 `docs/research/dsh-findings.md`；外挂插件实例 `/home/lycecilion/Workspace/external/dsh-ads`。
+> 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1.3、§6.3；部署实机见 `docs/archive/dsh-findings.md`；外挂插件实例 `/home/lycecilion/Workspace/external/dsh-ads`。
 
 ## TL;DR
 
@@ -371,7 +371,7 @@ intro:  'var module = { exports: {} }; var exports = module.exports;'
 
 ### "更适合 chatting 而非 coding" 的大改（两条正交轴）
 
-- **能力裁剪（0 代码）**：编码向能力（fs/shell/lsp/skills/agent-instructions）落在 **agent preset 的 plugins 列表**（`docs/research/dsh-findings.md` §2.7 已实测：Web 面下会话能力由 preset 决定，不是顶层 row 的 disabled）。核心包（session/tools/agent-loop/llm）领域中立，编码假设集中在 bundle 行。
+- **能力裁剪（0 代码）**：编码向能力（fs/shell/lsp/skills/agent-instructions）落在 **agent preset 的 plugins 列表**（`docs/archive/dsh-findings.md` §2.7 已实测：Web 面下会话能力由 preset 决定，不是顶层 row 的 disabled）。核心包（session/tools/agent-loop/llm）领域中立，编码假设集中在 bundle 行。
 - **界面重塑（slot 层）**：
   - ① profile patch `disabled: true` 关掉 `ui-trajectory` / `ui-deliverables`（变更文件卡）/ 多余 settings 页；
   - ② 用低 `priority` 抢占 `tool.call.toolview`（弱化参数流式预览）、`conversation.view`（让位 chat），或整体换 `main` / `conversation.*` 组合；

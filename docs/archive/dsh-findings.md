@@ -5,7 +5,7 @@
 
 > 整理：Agent 会话，2026-09-28（v0.3）。基于本机 Fedora 实机验证，供 Lepimemory 部署与后续开发使用。
 > 关联：当前架构见 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) §1–§2。
-> 相关文件：`docs/research/artifacts/`（组合树快照）、`dsh/profiles/lepimemory/`（profile 草案）、仓库根目录部署脚手架。
+> 相关文件：`docs/archive/artifacts/`（组合树快照）、`dsh/profiles/lepimemory/`（profile 草案）、仓库根目录部署脚手架。
 
 ## TL;DR
 

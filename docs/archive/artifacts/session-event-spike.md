@@ -73,7 +73,7 @@ open(id,'write') FAILED: SessionAlreadyOwnedError: session "session-…" is alre
   - **效果**（模型看到什么）→ dsh 原生 `system/message` 的 Prompt Diff（已可回放）；
   - **原因**（为何变化）→ **插件自有持久化**（`<DSH_HOME>/lepimemory/audit.jsonl`）。
 - 原计划四个自研事件（`memory/recall` / `memory/retain` / `persona/state-diff` / `decision/attribution`）全部作废。
-- 记录于 `docs/research/dsh-findings.md` §2.13–2.14。
+- 记录于 `docs/archive/dsh-findings.md` §2.13–2.14。
 
 ## 附：可复用结论
 

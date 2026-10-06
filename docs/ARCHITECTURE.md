@@ -2,8 +2,8 @@
 
 本文是 Lepimemory **唯一的现行架构说明**。它记录*现在*的实现、职责边界与设计理由，并指向源码落点；它不是路线图，也不是验收记录。
 
-- 早期过程草稿（`CONCEPTS.md`、`DESIGN_NOTES.md`、`PLAN.md`、`HANDOFF.md`）已被本文**取代并移除**；其中的有效结论并入此处，历史记录保留在 [DEVLOG](DEVLOG.md) 与 [research](research/)。
-- 面向观众/演示者的页面导览见 [MECHANISM](MECHANISM.md)；固定验收剧本见 [DEMO](DEMO.md)；实测结论与证据见 [DEVLOG](DEVLOG.md) 与 [research](research/)。
+- 早期过程草稿（`CONCEPTS.md`、`DESIGN_NOTES.md`、`PLAN.md`、`HANDOFF.md`）已被本文**取代并移除**；其中的有效结论并入此处，历史记录保留在 [DEVLOG](DEVLOG.md) 与 [archive](archive/)。
+- 面向观众/演示者的页面导览见 [MECHANISM](MECHANISM.md)；固定验收剧本见 [DEMO](DEMO.md)；实测结论与证据见 [DEVLOG](DEVLOG.md) 与 [archive](archive/)。
 - 实际启动、开发与排查命令见仓库 [README](../README.md) 与 [dsh/README](../dsh/README.md)。
 
 **贯穿全篇的命题**：过去发生的事情，经过记忆与状态系统，确实改变了角色未来的判断、表达和行动；而这条因果链又能被人看到。架构的每一处取舍都在服务这条闭环，并把它做成**可核对的账本**而非事后日志。
@@ -298,9 +298,9 @@ scripts/
 ### 8.2 证据索引
 
 - **过程与坑、日期化历史**：[DEVLOG](DEVLOG.md)（含 93/93 等**当时**的里程碑记录，属历史，不代表当前数字）。
-- **实测结论**：`docs/research/dsh-findings.md`、`dsh-ui-findings.md`、`hindsight-findings.md`、`hindsight-measurements.md`。
-- **原始证据**：`docs/research/artifacts/`（召回/遗忘/写入/行动/上下文/信任档/状态面板/状态持久化/状态机/会话事件 spike/人设注入/假人格 A/B 等）。
+- **实测结论**：`docs/archive/dsh-findings.md`、`dsh-ui-findings.md`、`hindsight-findings.md`、`hindsight-measurements.md`。
+- **原始证据**：`docs/archive/artifacts/`（召回/遗忘/写入/行动/上下文/信任档/状态面板/状态持久化/状态机/会话事件 spike/人设注入/假人格 A/B 等）。
 - **面向观众与验收**：[MECHANISM](MECHANISM.md)（页面导览）、[DEMO](DEMO.md)（D0–D8 固定剧本与诚实清单）。
 - **启动与开发**：[README](../README.md)、[dsh/README](../dsh/README.md)、`LOCAL_HANDOFF.md`（本机启动卡，验收不使用其中的 playground home/bank/端口）。
 
-> research 与 DEVLOG 条目保留**当时的**采样值、方法与源码位置，可能反映已被取代的行为；读取时以本文与当前 `PLUGIN/src` 为准。
+> archive 与 DEVLOG 条目保留**当时的**采样值、方法与源码位置，可能反映已被取代的行为；读取时以本文与当前 `PLUGIN/src` 为准。

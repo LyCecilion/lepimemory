@@ -1,7 +1,7 @@
 # 开发日志 — 蝶忆 Lepimemory
 
 > 用途：**过程与踩坑的诚实记录**。给未来的自己、以及想了解「我们如何定义问题、在哪里栽过跟头」的人。
-> 分工：结论进 `docs/ARCHITECTURE.md` / `docs/research/*-findings.md`；原始证据进 `docs/research/artifacts/`；**本文记「怎么走过来的」与「坑」**。
+> 分工：结论进 `docs/ARCHITECTURE.md` / `docs/archive/*-findings.md`；原始证据进 `docs/archive/artifacts/`；**本文记「怎么走过来的」与「坑」**。
 > ⚠️ 下文中出现的 `CONCEPTS.md` / `DESIGN_NOTES.md` / `PLAN.md` / `HANDOFF.md` 均为**过程文件的历史名称**：这些中间草稿现已移除，有效结论并入 `docs/ARCHITECTURE.md`；此处保留原文件名只为忠实记录事件。
 
 ---
@@ -10,7 +10,7 @@
 
 - 想看**能力现状** → `README.md` + `dsh/README.md` + `docs/DEMO.md`
 - 想看**架构决策与理由** → `docs/ARCHITECTURE.md`（唯一的现行架构说明）
-- 想看**实测结论** → `docs/research/dsh-findings.md` / `hindsight-findings.md` + `artifacts/`
+- 想看**实测结论** → `docs/archive/dsh-findings.md` / `hindsight-findings.md` + `artifacts/`
 - 想看**过程与坑** → **本文**
 
 ---
@@ -19,11 +19,11 @@
 
 ### Phase 0–2（前情，摘要）
 架构决策（三项核心：dsh 当骨架 / Hindsight 当记忆微服务 / 状态机自研）、Hindsight 接入与中文修复（换多语言模型）、dsh 侧「状态注入→语气变化」可行性验证。
-详见 `docs/ARCHITECTURE.md`、`docs/research/*-findings.md`。
+详见 `docs/ARCHITECTURE.md`、`docs/archive/*-findings.md`。
 
 ### Phase 3（本阶段详录；`exp/state-persistence` → `develop`）
 
-> 全程用 `exp/` 分支起步；2026-10-03 起收尾改在 **`develop`**（从 `main` 分出并并入 `exp/state-persistence`）。提交带 gitmoji 的 conventional commit；每条改动都留 `docs/research/artifacts/` 证据。
+> 全程用 `exp/` 分支起步；2026-10-03 起收尾改在 **`develop`**（从 `main` 分出并并入 `exp/state-persistence`）。提交带 gitmoji 的 conventional commit；每条改动都留 `docs/archive/artifacts/` 证据。
 
 | # | 提交 | 事项 |
 | --- | --- | --- |
@@ -309,5 +309,6 @@ Presentation 之后按批准的维护计划执行。**不改运行时行为、�
 - **服务端渐进 TS**：先定义/配置、再 store/evidence/processor/admission/来源证明/worker、最后 control/history/memory/panel/index 与两脚本源；消费已安装的 Context/Agent/Session 声明，不引入 `any` 或全局 AnyContext。新 `src/shared/domain.ts` / `api.ts` 收敛共享领域与 DTO；state/avatar 的纯定义移入 `src/shared`；`scripts/build.mts` 同样过 tools typecheck，不留未检查的 JS 洞。
 - **客户端迁 TSX 与生命周期拆分**：客户端改为 `src/client/index.tsx` + 组件化拆分（Panel/StateStrip/Badges/History*/CandidateDetail/RecallDetail/EditorForm/AvatarOverlay/atoms），用 esbuild 生成宿主 lazy-CJS `client.js`；hooks（invalidation/history/receipts/retry/candidate/state-editor）拥有各自的请求纪律与失效路径，面板与立绘共享同一份 state feed（不出现两套 5 秒轮询）。客户端新增行为测试限于会回归的活动优先级。
 - **记忆协调拆分**：`memory.ts` 收为门面；拆出 `memory-supervisor.ts`（tick/lease/槽）、`memory-pipeline.ts`（normalize/admit，无 SQL）、`memory-authorization.ts`（政策读取 + 原子提交）、`memory-common.ts` 与 `task-store.ts` / `candidate-store.ts`（具名 SQL owner）。唯一删除的 dependency 是已确认未使用的 `history`；其它 specialized owner 的 SQL 不在本阶段抽象。
-- **文档收敛**：新增 `docs/ARCHITECTURE.md` 作为**唯一的现行架构说明**（八节：职责边界/源码产物构建/控制候选授权/持久化与远程任务/召回纠正遗忘/状态行动立绘/边界与验证/决策演进与证据索引），有效结论并入、旧草稿不再保留；删除中间草稿 `CONCEPTS.md`、`DESIGN_NOTES.md`、`PLAN.md`、`HANDOFF.md`；`README` / `dsh/README` / `MECHANISM` / `DEVLOG` 的入口与源码地图更新到 `src/*.ts`、`src/shared/*.ts`、`src/client/index.tsx`；16 份 research 文件加历史性质表头与当前架构链接；`LOCAL_HANDOFF.md` 与 `CHALLENGE.md` **原样保留**。
+- **文档收敛**：新增 `docs/ARCHITECTURE.md` 作为**唯一的现行架构说明**（八节：职责边界/源码产物构建/控制候选授权/持久化与远程任务/召回纠正遗忘/状态行动立绘/边界与验证/决策演进与证据索引），有效结论并入、旧草稿不再保留；删除中间草稿 `CONCEPTS.md`、`DESIGN_NOTES.md`、`PLAN.md`、`HANDOFF.md`；`README` / `dsh/README` / `MECHANISM` / `DEVLOG` 的入口与源码地图更新到 `src/*.ts`、`src/shared/*.ts`、`src/client/index.tsx`；16 份历史证据文件加历史性质表头与当前架构链接；`LOCAL_HANDOFF.md` 与 `CHALLENGE.md` **原样保留**。
+- **历史证据改名为档案**：把 `docs/research/` 重命名为 `docs/archive/`（含其下 `artifacts/`），让目录名直接表明"档案、非现行工作流"；现行文档中的引用与链接同步更新，文件内容不变。
 - **证据**：本次实际运行固定 `make verify`，输出 **103/103 通过**、SQLite smoke 通过（`lepimemory-runtime: verify passed`）；`make typecheck` / `make lint` / `make format-check`（即 `make check`）以执行时输出为准。**93/93 是 2026-10-05 的历史记录**，不代表当前数字；两者并存、互不覆盖。

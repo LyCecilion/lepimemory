@@ -2,7 +2,7 @@
 
 > Lepimemory 的 dsh 侧资产：一个 profile（人设 + 能力面裁剪 + 隔离 realm）和一个 out-of-tree 插件 `@dsh-external/dsh-lepimemory-state`。
 > 本项目入口与演示见仓库 [README](../README.md)；**本机**启动卡见 [LOCAL_HANDOFF.md](../LOCAL_HANDOFF.md)（仅本机，不用于验收）；架构与设计理由见 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
-> 历史实验记录（Phase 1 草案期）见 [docs/research/dsh-findings.md](../docs/research/dsh-findings.md)。
+> 历史实验记录（Phase 1 草案期）见 [docs/archive/dsh-findings.md](../docs/archive/dsh-findings.md)。
 
 ## 组成
 
@@ -104,7 +104,7 @@ make check          # 完整门：verify → lint → format-check
 - 用固定 `.runtime/bin/node` / `.runtime/bin/pnpm`；为新验证 `mktemp -d` 出一个自有 fixture，配 `DSH_HOME=$FIXTURE/home`、全新 `LEPI_BANK=lepimemory-<uuid>` 与空 env 文件。**绝不**复用或清理用户 home/bank/volume。
 - **不运行** `make reset` / `docker compose down -v` 来「从零开始」；不停止用户服务。想干净就用新 home + 新 bank。
 - **合成数据、脱敏输入**：测试一律用虚构材料（如「青柠」/`lepi-test`），不把任何真实记忆、笔名、私人端点或凭据写进仓库或 fixture。提交前对照本地 `.sanitize-patterns`（gitignored，含个人标识，**绝不提交**）复查。
-- **实验原始产物放临时目录**：`--dump-config` 快照、A/B patch、session jsonl、沙盒 home 一律放 `/tmp`，验证完只把**结论**写进 `docs/research/`；不进仓库。
+- **实验原始产物放临时目录**：`--dump-config` 快照、A/B patch、session jsonl、沙盒 home 一律放 `/tmp`，验证完只把**结论**写进 `docs/archive/`；不进仓库。
 - 外部记忆服务（Hindsight/laya）缺席时用本地 fixture 注入的外部依赖缺席验证「非 fatal / deferred」分支；不为测试在产品代码里加 skip 开关。
 
 ## 配置
@@ -113,4 +113,4 @@ make check          # 完整门：verify → lint → format-check
 
 ## 现状 / 证据
 
-架构与设计理由见 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)；演示剧本与开发日志见 [docs/DEMO.md](../docs/DEMO.md)、[docs/DEVLOG.md](../docs/DEVLOG.md)；当前固定 `make verify` 的实际输出与历史里程碑均在 DEVLOG。11 项运行时实现及实际 Web D0–D7 已完成；按用户要求收束，D8 完整独立演示及额外后端比较不继续执行，**不宣称 D0–D8 全套通过**。`docs/research/` 保留为历史记录，非当前工作流。
+架构与设计理由见 [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)；演示剧本与开发日志见 [docs/DEMO.md](../docs/DEMO.md)、[docs/DEVLOG.md](../docs/DEVLOG.md)；当前固定 `make verify` 的实际输出与历史里程碑均在 DEVLOG。11 项运行时实现及实际 Web D0–D7 已完成；按用户要求收束，D8 完整独立演示及额外后端比较不继续执行，**不宣称 D0–D8 全套通过**。`docs/archive/` 保留为历史记录，非当前工作流。
