@@ -141,6 +141,19 @@ window.__ModuleLoader__.load({
     ]
     const KIND_LABEL = new Map(KINDS)
 
+    /** 审计类型 → 「它想做什么」的人话标签（讲解优先视图用）。 */
+    const INTENT_KEY = {
+      audit: 'it_audit', recall: 'it_recall', retain: 'it_retain', forget: 'it_forget',
+      action: 'it_action', task: 'it_task', control: 'it_control', consent: 'it_consent',
+    }
+    /** 候选快照正文 → 单行摘要（超长截断）；拿不到正文（如已遗忘未揭晓）返回 null。 */
+    function excerptOf(node) {
+      const snap = node && node.data && node.data.snapshot
+      const text = snap && typeof snap.text === 'string' ? snap.text.trim() : ''
+      if (!text) return null
+      return text.length > 60 ? text.slice(0, 60) + '…' : text
+    }
+
     /** 活动 → 状态条色配（复用现有徽章色）。 */
     const ACT_CLASS = { idle: 'muted', think: 'warn', speak: 'warn', tool: 'warn', approval: 'ok', question: 'ok', error: 'err' }
 
@@ -218,6 +231,11 @@ window.__ModuleLoader__.load({
       prepared: 'st_prepared',
       executed: 'st_executed',
       unavailable: 'st_unavailable',
+      admission: 'st_admission',
+      received: 'st_received',
+      retry_pending: 'st_retry_pending',
+      resubmit_required: 'st_resubmit_required',
+      parked: 'st_parked',
     }
 
     /** 正向状态（只有真正可核对完成的才配。绝不按 !skipped 推断成功）。 */
@@ -263,6 +281,13 @@ window.__ModuleLoader__.load({
       '.lep-tab--on { background: var(--dsw-alias-bg-elevated, rgba(127,127,127,0.15)); color: inherit; }',
       '.lep-hist__list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; }',
       '.lep-row { padding: 2px 0; white-space: normal; }',
+      '.lep-toolbar { margin-top: 4px; display: flex; gap: 10px; align-items: center; }',
+      '.lep-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; opacity: 0.8; }',
+      '.lep-intent { margin-right: 6px; opacity: 0.85; }',
+      '.lep-excerpt { margin-left: 6px; opacity: 0.7; }',
+      '.lep-excerpt::before { content: "「"; }',
+      '.lep-excerpt::after { content: "」"; }',
+      '.lep-rawsum { margin-left: 6px; opacity: 0.6; font-family: monospace; }',
       '.lep-row time { opacity: 0.6; margin-right: 6px; }',
       '.lep-hist__empty { opacity: 0.6; }',
       '.lep-hist__nav { display: flex; align-items: center; gap: 8px; margin-top: 4px; }',
@@ -476,6 +501,7 @@ window.__ModuleLoader__.load({
       const [formError, setFormError] = React.useState('')
       const [saving, setSaving] = React.useState(false)
       const [preview, setPreview] = React.useState(null)
+      const [debug, setDebug] = React.useState(false)
       const [retrying, setRetrying] = React.useState({})
       const [receipts, setReceipts] = React.useState([])
 
@@ -586,19 +612,19 @@ window.__ModuleLoader__.load({
             key,
             at: e.at,
             auditId: e.id,
-            text: `${statusLabel(t, e.status, e.data && e.data.legacy)} · ${e.summary || type}`,
+            text: `${INTENT_KEY[type] ? t(INTENT_KEY[type]) : type} · ${statusLabel(t, e.status, e.data && e.data.legacy)}`,
           })
           changed = true
         }
         if (changed) publishReceipts()
       }, [hist, t])
 
-      // 详情随真实历史轮询刷新；不能永久缓存遗忘前的正文或旧任务状态。
+      // 详情/正文摘要随真实历史轮询刷新；不能永久缓存遗忘前的正文或旧任务状态。
       React.useEffect(() => {
         const visible = new Set()
         if (open && hist && hist.ok === true) {
           for (const e of hist.entries || []) {
-            if (e.candidate_id && expanded[`e${e.id}`]) visible.add(e.candidate_id)
+            if (e.candidate_id) visible.add(e.candidate_id) // 行内正文摘要（默认视图）
             if (expanded[`e${e.id}`]) for (const chain of e.data?.chains || []) {
               for (const source of chain.sources || []) {
                 if (source.candidate_id && expanded[`c${e.id}-${source.candidate_id}`]) visible.add(source.candidate_id)
@@ -880,12 +906,16 @@ window.__ModuleLoader__.load({
         if (e.request_id) retryButtons.push(React.createElement('button', { key: 'rq', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`request:${e.request_id}`], onClick: () => doRetry('request', e.request_id) }, t('retryRequest')))
         if (e.task_id) retryButtons.push(React.createElement('button', { key: 'tk', type: 'button', className: 'lep-btn lep-btn--mini', disabled: !!retrying[`task:${e.task_id}`], onClick: () => doRetry('task', e.task_id) }, t('retryTask')))
         const hasDetail = refs.length > 0 || !!e.candidate_id || retryButtons.length > 0
+        const intent = INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')
+        const excerpt = e.candidate_id ? excerptOf(cand[e.candidate_id]) : null
         return React.createElement(
           'li',
           { key, className: 'lep-row' },
           React.createElement('time', null, fmtTime(e.at)),
+          React.createElement('span', { className: 'lep-intent' }, intent),
           badge,
-          React.createElement('span', null, e.summary || e.type || ''),
+          excerpt ? React.createElement('span', { className: 'lep-excerpt' }, excerpt) : null,
+          debug ? React.createElement('span', { className: 'lep-rawsum' }, e.summary || '') : null,
           hasDetail
             ? React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => toggleEntry(key, e) }, isOpen ? t('collapse') : t('detail'))
             : null,
@@ -1067,6 +1097,16 @@ window.__ModuleLoader__.load({
         { className: 'lep-state' },
         strip,
         badgesBlock,
+        React.createElement(
+          'div',
+          { className: 'lep-toolbar' },
+          React.createElement(
+            'label',
+            { className: 'lep-toggle', title: t('debugHint') },
+            React.createElement('input', { type: 'checkbox', checked: debug, onChange: (ev) => setDebug(ev.target.checked) }),
+            t('debugMode'),
+          ),
+        ),
         rawBlock,
         receiptsBlock,
         React.createElement(
@@ -1174,6 +1214,11 @@ window.__ModuleLoader__.load({
         st_prepared: '已准备',
         st_executed: '已执行',
         st_unavailable: '不可用',
+        st_admission: '准入判定',
+        st_received: '已接收',
+        st_retry_pending: '待重试',
+        st_resubmit_required: '需重新发起',
+        st_parked: '已停车',
         legacySuffix: '（历史记录）',
         detail: '详情',
         collapse: '收起',
@@ -1201,6 +1246,16 @@ window.__ModuleLoader__.load({
         ed_preview_failed: '预览不可用',
         baseline: '基线',
         ed_hint: '调整演示状态（原因固定记为「操作者调整演示状态」）',
+        it_audit: '审计',
+        it_recall: '回忆',
+        it_retain: '写入记忆',
+        it_forget: '遗忘',
+        it_action: '行动',
+        it_task: '后台任务',
+        it_control: '状态控制',
+        it_consent: '授权',
+        debugMode: '调试模式',
+        debugHint: '显示原始摘要与 ID（排查用）',
         formRange: '字段 {field} 必须在 {lo}..{hi}',
         reveal: '查看原始获准快照（仅审计，不恢复）',
         revealHide: '隐藏快照',
@@ -1300,6 +1355,11 @@ window.__ModuleLoader__.load({
         st_prepared: 'Prepared',
         st_executed: 'Executed',
         st_unavailable: 'Unavailable',
+        st_admission: 'Admission',
+        st_received: 'Received',
+        st_retry_pending: 'Retry pending',
+        st_resubmit_required: 'Resubmit required',
+        st_parked: 'Parked',
         legacySuffix: ' (legacy)',
         detail: 'Details',
         collapse: 'Hide',
@@ -1327,6 +1387,16 @@ window.__ModuleLoader__.load({
         ed_preview_failed: 'Preview unavailable',
         baseline: 'Baseline',
         ed_hint: 'Adjust the demo state (cause is recorded as the fixed operator note)',
+        it_audit: 'Audit',
+        it_recall: 'Recall',
+        it_retain: 'Save to memory',
+        it_forget: 'Forget',
+        it_action: 'Action',
+        it_task: 'Background task',
+        it_control: 'State control',
+        it_consent: 'Consent',
+        debugMode: 'Debug mode',
+        debugHint: 'Show raw summary and IDs (for troubleshooting)',
         formRange: 'Field {field} must be within {lo}..{hi}',
         reveal: 'View original approved snapshot (audit only, no restore)',
         revealHide: 'Hide snapshot',
