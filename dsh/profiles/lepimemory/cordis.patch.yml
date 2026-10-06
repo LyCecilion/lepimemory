@@ -84,7 +84,7 @@
                 name: "@deepseek-ai/dsh-command-compact"
               - id: tool-result-pruner
                 name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
-          # 行动工具（自研）后续挂在这里或由插件注册，见 docs/archive/dsh-findings.md §6。
+          # 行动工具 write_note 由插件注册（src/action.ts）。
 
 # ── 3) 默认 preset：会话创建时默认用 lepimemory ──────────────────
 - id: agent-preset-registry
