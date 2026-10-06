@@ -5,7 +5,7 @@
 - 想马上解释页面：先读第 1、2 节。
 - 想了解背后的闭环：读第 3–7 节。
 - 想现场演示：照第 8 节的路线走。
-- 安装与配置见 [README](../README.md)，完整验收步骤见 [DEMO](DEMO.md)，实现取舍见 [CONCEPTS](../CONCEPTS.md)，实际运行证据见 [DEVLOG](DEVLOG.md)。
+- 安装与配置见 [README](../README.md)，完整验收步骤见 [DEMO](DEMO.md)，架构与实现取舍见 [ARCHITECTURE](ARCHITECTURE.md)，实际运行证据见 [DEVLOG](DEVLOG.md)。
 
 ## 1. 一分钟讲清楚它是什么
 
@@ -332,14 +332,16 @@ Hindsight 返回的是检索候选，不是直接给角色的最终上下文。�
 
 | 想了解的机制 | 入口 |
 | --- | --- |
-| 整体前置检查、召回注入与真实回执 | [index.js](../dsh/plugins/dsh-lepimemory-state/lib/index.js) |
-| 独立理解与结果契约 | [processor.js](../dsh/plugins/dsh-lepimemory-state/lib/processor.js)、[contracts.js](../dsh/plugins/dsh-lepimemory-state/lib/contracts.js) |
-| 原生证据与授权控制 | [evidence.js](../dsh/plugins/dsh-lepimemory-state/lib/evidence.js)、[control.js](../dsh/plugins/dsh-lepimemory-state/lib/control.js) |
-| 长期价值与后台协调 | [admission.js](../dsh/plugins/dsh-lepimemory-state/lib/admission.js)、[memory.js](../dsh/plugins/dsh-lepimemory-state/lib/memory.js) |
-| 原操作写入核验与整理 | [write-worker.js](../dsh/plugins/dsh-lepimemory-state/lib/write-worker.js)、[curate-worker.js](../dsh/plugins/dsh-lepimemory-state/lib/curate-worker.js) |
-| 召回过滤、来源核验与来源身份 | [recall.js](../dsh/plugins/dsh-lepimemory-state/lib/recall.js)、[recall-source.js](../dsh/plugins/dsh-lepimemory-state/lib/recall-source.js)、[trust.js](../dsh/plugins/dsh-lepimemory-state/lib/trust.js) |
-| 有效历史隔离 | [history.js](../dsh/plugins/dsh-lepimemory-state/lib/history.js) |
-| 真实便条、状态与去重结算 | [action.js](../dsh/plugins/dsh-lepimemory-state/lib/action.js)、[state-runtime.js](../dsh/plugins/dsh-lepimemory-state/lib/state-runtime.js)、[machine.js](../dsh/plugins/dsh-lepimemory-state/lib/machine.js) |
-| 账本与页面 | [store.js](../dsh/plugins/dsh-lepimemory-state/lib/store.js)、[panel.js](../dsh/plugins/dsh-lepimemory-state/lib/panel.js)、[client.js](../dsh/plugins/dsh-lepimemory-state/client.js) |
+| 整体前置检查、召回注入与真实回执 | [src/index.ts](../dsh/plugins/dsh-lepimemory-state/src/index.ts) |
+| 独立理解与结果契约 | [src/processor.ts](../dsh/plugins/dsh-lepimemory-state/src/processor.ts)、[src/contracts.ts](../dsh/plugins/dsh-lepimemory-state/src/contracts.ts) |
+| 原生证据与授权控制 | [src/evidence.ts](../dsh/plugins/dsh-lepimemory-state/src/evidence.ts)、[src/control.ts](../dsh/plugins/dsh-lepimemory-state/src/control.ts) |
+| 长期价值与后台协调 | [src/admission.ts](../dsh/plugins/dsh-lepimemory-state/src/admission.ts)、[src/memory.ts](../dsh/plugins/dsh-lepimemory-state/src/memory.ts) |
+| 记忆协调拆分（supervisor / pipeline / authorization） | [src/memory-supervisor.ts](../dsh/plugins/dsh-lepimemory-state/src/memory-supervisor.ts)、[src/memory-pipeline.ts](../dsh/plugins/dsh-lepimemory-state/src/memory-pipeline.ts)、[src/memory-authorization.ts](../dsh/plugins/dsh-lepimemory-state/src/memory-authorization.ts) |
+| 原操作写入核验与整理 | [src/write-worker.ts](../dsh/plugins/dsh-lepimemory-state/src/write-worker.ts)、[src/curate-worker.ts](../dsh/plugins/dsh-lepimemory-state/src/curate-worker.ts) |
+| 召回过滤、来源核验与来源身份 | [src/recall.ts](../dsh/plugins/dsh-lepimemory-state/src/recall.ts)、[src/recall-source.ts](../dsh/plugins/dsh-lepimemory-state/src/recall-source.ts)、[src/trust.ts](../dsh/plugins/dsh-lepimemory-state/src/trust.ts) |
+| 有效历史隔离 | [src/history.ts](../dsh/plugins/dsh-lepimemory-state/src/history.ts) |
+| 真实便条、状态与去重结算 | [src/action.ts](../dsh/plugins/dsh-lepimemory-state/src/action.ts)、[src/state-runtime.ts](../dsh/plugins/dsh-lepimemory-state/src/state-runtime.ts)、[src/machine.ts](../dsh/plugins/dsh-lepimemory-state/src/machine.ts) |
+| 账本与页面 | [src/store.ts](../dsh/plugins/dsh-lepimemory-state/src/store.ts)、[src/panel.ts](../dsh/plugins/dsh-lepimemory-state/src/panel.ts)、[src/client/index.tsx](../dsh/plugins/dsh-lepimemory-state/src/client/index.tsx) |
+| 共享状态 / 活动 / 立绘定义 | [src/shared/state.ts](../dsh/plugins/dsh-lepimemory-state/src/shared/state.ts)、[src/shared/activity.ts](../dsh/plugins/dsh-lepimemory-state/src/shared/activity.ts)、[src/shared/avatar-frames.ts](../dsh/plugins/dsh-lepimemory-state/src/shared/avatar-frames.ts) |
 
-**验收边界**：现有运行时实现及真实 Web D0–D7 已有运行证据；D8 完整独立演示与额外后端比较按要求收束，未宣称通过。此前最终行为检查为 93/93，细节见 [DEVLOG](DEVLOG.md)。本文是机制导览，不会把说明文字、示意图或演示建议当成新增运行证据，也不承诺生产级全场景可靠性。
+**验收边界**：现有运行时实现及真实 Web D0–D7 已有运行证据；D8 完整独立演示与额外后端比较按要求收束，未宣称通过。行为检查数字随时间推进：**93/93 是 2026-10-05 的历史记录**，当前固定 `make verify` 实际输出为 **103/103 通过**（每次以命令输出为准），细节见 [DEVLOG](DEVLOG.md)。本文是机制导览，不会把说明文字、示意图或演示建议当成新增运行证据，也不承诺生产级全场景可靠性。
