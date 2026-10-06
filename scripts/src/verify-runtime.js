@@ -6,18 +6,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { openStore } from '../dsh/plugins/dsh-lepimemory-state/lib/store.js';
-import { initialState } from '../dsh/plugins/dsh-lepimemory-state/lib/state.js';
+import { openStore } from '../../dsh/plugins/dsh-lepimemory-state/lib/store.js';
+import { initialState } from '../../dsh/plugins/dsh-lepimemory-state/lib/state.js';
+import { NODE_VERSION } from '../../dsh/plugins/dsh-lepimemory-state/lib/shared/pins.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-assert.equal(process.version, 'v24.20.0');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+assert.equal(process.version, NODE_VERSION);
 assert.equal(fs.realpathSync(process.execPath), fs.realpathSync(path.join(root, '.runtime/bin/node')));
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lep-verify-'));
 const dir = path.join(home, 'lepimemory');
 fs.mkdirSync(dir);
 const dbFile = path.join(dir, 'runtime.sqlite');
 const time = Date.parse('2026-10-05T00:00:00.000Z');
-const storeModule = fileURLToPath(new URL('../dsh/plugins/dsh-lepimemory-state/lib/store.js', import.meta.url));
+const storeModule = fileURLToPath(
+  new URL('../../dsh/plugins/dsh-lepimemory-state/lib/store.js', import.meta.url),
+);
 let store;
 try {
     const legacy = initialState(new Date(time).toISOString());

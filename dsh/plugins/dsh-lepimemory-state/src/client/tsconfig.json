@@ -1,0 +1,12 @@
+{
+  "extends": "../../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react",
+    "types": [],
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "./**/*.js", "../shared/**/*.ts"]
+}

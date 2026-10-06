@@ -26,9 +26,10 @@ import { decayMood } from "./machine.js";
 import { AVATAR_ASSETS } from "./avatar-assets.js";
 import { NUMERIC_FIELDS, renderState, toneOf, nearOf, validateState } from "./state.js";
 import { SCHEMA_VERSION } from "./store.js";
+import { NODE_VERSION } from "./shared/pins.js";
 
-/** 固定的运行时 Node（与 scripts/runtime.mjs `NODE_VERSION` 一致）。 */
-const PINNED_NODE = "v24.20.0";
+/** 固定的运行时 Node（共享版本钉，见 src/shared/pins.ts）。 */
+const PINNED_NODE = NODE_VERSION;
 /** 本插件 package.json 声明的 peer dsh 版本（唯一事实来源，不重复硬编码）。 */
 const PINNED_DSH = (() => {
     try { return createRequire(import.meta.url)("../package.json").peerDependencies?.["@deepseek-ai/dsh"] ?? null; }

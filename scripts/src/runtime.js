@@ -4,9 +4,9 @@
  *
  * The Makefile invokes this file through the verified repository Node:
  *
- *   .runtime/bin/node scripts/runtime.mjs install   # make install-profile
- *   .runtime/bin/node scripts/runtime.mjs dev       # make dev
- *   .runtime/bin/node scripts/runtime.mjs verify    # make verify
+ *   .runtime/bin/node scripts/dist/runtime.js install   # make install-profile
+ *   .runtime/bin/node scripts/dist/runtime.js dev       # make dev
+ *   .runtime/bin/node scripts/dist/runtime.js verify    # make verify
  *
  * Ownership boundary
  * ------------------
@@ -41,17 +41,15 @@ import {
     applyDerivedEnv,
     redactConfig,
     ConfigError,
-} from "../dsh/plugins/dsh-lepimemory-state/lib/config.js";
-
-// ── pinned runtime facts ─────────────────────────────────────────────
-const NODE_VERSION = "v24.20.0";
-const PNPM_VERSION = "10.28.2";
-const DSH_VERSION = "0.1.7-rc.2";
+} from "../../dsh/plugins/dsh-lepimemory-state/lib/config.js";
+import {
+    NODE_VERSION,
+    PNPM_VERSION,
+    DSH_VERSION,
+} from "../../dsh/plugins/dsh-lepimemory-state/lib/shared/pins.js";
 
 const RUNTIME_BIN = path.join(REPO_ROOT, ".runtime", "bin");
 const PINNED_NODE = path.join(RUNTIME_BIN, "node");
-const PINNED_PNPM = path.join(RUNTIME_BIN, "pnpm");
-const ROOT_LOCK = path.join(REPO_ROOT, "pnpm-lock.yaml");
 
 const PROFILE_NAME = "lepimemory";
 const PROFILE_SRC = path.join(REPO_ROOT, "dsh", "profiles", PROFILE_NAME);
@@ -199,31 +197,6 @@ function loadResolvedConfig() {
         throw error;
     }
     return cfg;
-}
-
-// ── frozen pnpm install (parent materialises the root lock once) ─────
-function runFrozenInstall() {
-    if (!fs.existsSync(PINNED_PNPM)) {
-        throw new LaunchError("LEPI_PNPM_MISSING", "missing .runtime/bin/pnpm; run 'make bootstrap'");
-    }
-    if (!fs.existsSync(ROOT_LOCK)) {
-        throw new LaunchError(
-            "LEPI_LOCKFILE_MISSING",
-            "root pnpm-lock.yaml absent; the initial lock must be generated once before frozen install",
-        );
-    }
-    const version = spawnSync(PINNED_PNPM, ["--version"], { cwd: REPO_ROOT, encoding: "utf8" });
-    if (version.status !== 0 || version.stdout.trim() !== PNPM_VERSION) {
-        throw new LaunchError("LEPI_PNPM_VERSION_MISMATCH", `expected pnpm ${PNPM_VERSION}`);
-    }
-    const result = spawnSync(PINNED_PNPM, ["install", "--frozen-lockfile"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-        env: process.env,
-    });
-    if (result.status !== 0) {
-        throw new LaunchError("LEPI_INSTALL_FAILED", "frozen pnpm install failed");
-    }
 }
 
 // ── profile generation ───────────────────────────────────────────────
@@ -556,7 +529,6 @@ async function waitForCoreHealth(port, child) {
 function commandInstall() {
     assertPinnedNode();
     const cfg = loadResolvedConfig();
-    runFrozenInstall();
     assertInstallation();
     ensureProfile(cfg);
     if (process.env.LEPI_RUNTIME_DEBUG === "1") {
@@ -598,7 +570,7 @@ function runEntry(file, flags = []) {
 
 function commandVerify() {
     assertPinnedNode();
-    runEntry(path.join(REPO_ROOT, "scripts", "verify-runtime.mjs"));
+    runEntry(path.join(REPO_ROOT, "scripts", "dist", "verify-runtime.js"));
     runEntry(path.join(PLUGIN_DIR, "test", "runtime.test.js"), ["--test",
         path.join(PLUGIN_DIR, "test", "recall.test.js"), path.join(PLUGIN_DIR, "test", "history.test.js"),
         path.join(PLUGIN_DIR, "test", "action.test.js"), path.join(PLUGIN_DIR, "test", "avatar.test.js"),

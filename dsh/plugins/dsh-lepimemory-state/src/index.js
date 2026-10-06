@@ -15,6 +15,7 @@ import { createHistoryCoordinator } from './history.js';
 import { createMemoryRuntime } from './memory.js';
 import { createControl } from './control.js';
 import { HindsightClient } from './hindsight.js';
+import { NODE_VERSION, DSH_VERSION } from './shared/pins.js';
 
 export const name = 'lepimemory-state';
 export const RUNTIME_CONTRACT = 1;
@@ -23,9 +24,8 @@ export const inject = ['systemPrompt', 'tools', 'llm', 'agents', 'sessions',
     'sessionQuery', 'sessionPersistence', 'sessionProjections', 'agentPresets', 'userQuestions'];
 
 const require = createRequire(import.meta.url);
-const DSH_VERSION = '0.1.7-rc.2';
 function assertRuntime() {
-    if (process.version !== 'v24.20.0') throw new Error('LEPI_NODE_VERSION_MISMATCH');
+    if (process.version !== NODE_VERSION) throw new Error('LEPI_NODE_VERSION_MISMATCH');
     for (const dependency of ['@deepseek-ai/dsh', '@deepseek-ai/dsh-llm',
         '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session',
         '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-system-prompt']) {

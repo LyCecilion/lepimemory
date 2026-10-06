@@ -169,6 +169,11 @@ eggs/
 .eggs/
 /lib/
 !dsh/plugins/**/lib/
+# Generated plugin/build artifacts (produced by scripts/build.mts, not committed).
+/dsh/plugins/dsh-lepimemory-state/lib/
+/dsh/plugins/dsh-lepimemory-state/client.js
+/dsh/plugins/dsh-lepimemory-state/client.js.map
+/scripts/dist/
 lib64/
 parts/
 sdist/
