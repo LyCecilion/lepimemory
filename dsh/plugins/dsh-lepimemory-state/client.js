@@ -153,6 +153,23 @@ window.__ModuleLoader__.load({
       if (!text) return null
       return text.length > 60 ? text.slice(0, 60) + '…' : text
     }
+    /** 同一条记忆/任务的生命周期归一组：候选优先，其次任务/请求，再次单条。 */
+    function historyGroupKey(e) {
+      if (e.candidate_id) return `c:${e.candidate_id}`
+      if (e.task_id) return `t:${e.task_id}`
+      if (e.request_id) return `r:${e.request_id}`
+      return `i:${e.id}`
+    }
+    /** 把（新→旧排序的）entries 折叠成组：组内保持新→旧，组序按各组最新一条。 */
+    function groupHistory(entries) {
+      const map = new Map()
+      for (const e of entries || []) {
+        const k = historyGroupKey(e)
+        const g = map.get(k)
+        if (g) g.push(e); else map.set(k, [e])
+      }
+      return [...map.values()]
+    }
 
     /** 活动 → 状态条色配（复用现有徽章色）。 */
     const ACT_CLASS = { idle: 'muted', think: 'warn', speak: 'warn', tool: 'warn', approval: 'ok', question: 'ok', error: 'err' }
@@ -288,6 +305,10 @@ window.__ModuleLoader__.load({
       '.lep-excerpt::before { content: "「"; }',
       '.lep-excerpt::after { content: "」"; }',
       '.lep-rawsum { margin-left: 6px; opacity: 0.6; font-family: monospace; }',
+      '.lep-stages { margin-left: 6px; opacity: 0.6; }',
+      '.lep-count { margin-left: 6px; opacity: 0.5; }',
+      '.lep-row--stage { padding-left: 12px; opacity: 0.85; }',
+      '.lep-stages__list { list-style: none; margin: 2px 0 0; padding: 0; }',
       '.lep-row time { opacity: 0.6; margin-right: 6px; }',
       '.lep-hist__empty { opacity: 0.6; }',
       '.lep-hist__nav { display: flex; align-items: center; gap: 8px; margin-top: 4px; }',
@@ -654,7 +675,12 @@ window.__ModuleLoader__.load({
         const prevCtrl = candAbort.current.get(id)
         if (prevCtrl) prevCtrl.abort()
         candAbort.current.set(id, ctrl)
-        setCand((prev) => ({ ...prev, [id]: { loading: true, forbidden: false } }))
+        // 静默刷新：已有可用数据时不回落到 loading，避免轮询每 5s 把行内正文闪断一次。
+        setCand((prev) => {
+          const prior = prev[id]
+          if (prior && prior.ok === true) return prev
+          return { ...prev, [id]: { loading: true, forbidden: false } }
+        })
         const url = `/lepimemory/candidate?id=${encodeURIComponent(id)}${reveal ? '&reveal=1' : ''}`
         fetchJson(url, { signal: ctrl.signal })
           .then((r) => {
@@ -925,6 +951,52 @@ window.__ModuleLoader__.load({
         )
       }
 
+      /** 折叠行内的一条「阶段」：只留时间 · 状态 · 意图，不带任何 ID。 */
+      function renderStage(e, i) {
+        const key = e.id != null ? `s${e.id}` : `${e.at}-${i}`
+        const legacy = !!(e.data && e.data.legacy)
+        return React.createElement(
+          'li',
+          { key, className: 'lep-row lep-row--stage' },
+          React.createElement('time', null, fmtTime(e.at)),
+          React.createElement('span', { className: `lep-badge lep-badge--${statusClass(e.status, legacy)}` }, statusLabel(t, e.status, legacy)),
+          React.createElement('span', { className: 'lep-intent' }, INTENT_KEY[e.type] ? t(INTENT_KEY[e.type]) : (e.type || '')),
+        )
+      }
+
+      /** 讲解优先：把同一条记忆/任务的生命周期折叠成一行，展开看每个阶段。 */
+      function renderGroup(entries) {
+        const head = entries[0]
+        const key = `grp:${historyGroupKey(head)}`
+        const isOpen = !!expanded[key]
+        const legacy = !!(head.data && head.data.legacy)
+        const badge = React.createElement(
+          'span',
+          { className: `lep-badge lep-badge--${statusClass(head.status, legacy)}` },
+          statusLabel(t, head.status, legacy),
+        )
+        const intent = INTENT_KEY[head.type] ? t(INTENT_KEY[head.type]) : (head.type || '')
+        const excerpt = head.candidate_id ? excerptOf(cand[head.candidate_id]) : null
+        const seq = []
+        for (const e of [...entries].reverse()) {
+          const lbl = statusLabel(t, e.status, !!(e.data && e.data.legacy))
+          if (seq[seq.length - 1] !== lbl) seq.push(lbl)
+        }
+        const collapsed = entries.length > 1
+        return React.createElement(
+          'li',
+          { key, className: 'lep-row' },
+          React.createElement('time', null, fmtTime(head.at)),
+          React.createElement('span', { className: 'lep-intent' }, intent),
+          badge,
+          excerpt ? React.createElement('span', { className: 'lep-excerpt' }, excerpt) : null,
+          collapsed ? React.createElement('span', { className: 'lep-stages' }, seq.join(' › ')) : null,
+          collapsed ? React.createElement('span', { className: 'lep-count' }, `×${entries.length}`) : null,
+          React.createElement('button', { type: 'button', className: 'lep-btn lep-btn--mini', onClick: () => setExpanded((prev) => ({ ...prev, [key]: !prev[key] })) }, isOpen ? t('collapse') : t('detail')),
+          isOpen ? React.createElement('ul', { className: 'lep-stages__list' }, entries.map((e, i) => renderStage(e, i))) : null,
+        )
+      }
+
       if (s === null) return null
       if (s.ok === false) {
         return React.createElement('div', { className: 'lep-state' }, s.forbidden ? t('forbidden') : t('unavailable'))
@@ -933,6 +1005,13 @@ window.__ModuleLoader__.load({
       const total = hist && hist.ok === true ? hist.total : 0
       const pages = Math.max(1, Math.ceil(total / PAGE))
       const page = Math.floor(offset / PAGE) + 1
+
+      // 非 debug：同一记忆/任务的生命周期折叠成一行；debug：保留逐条审计行。
+      const listModel = hist && hist.ok === true
+        ? (debug
+            ? hist.entries.map((e) => ({ entries: null, e }))
+            : groupHistory(hist.entries).map((entries) => ({ entries, e: entries[0] })))
+        : []
 
       const moodMeters = React.createElement(
         'span',
@@ -1039,7 +1118,7 @@ window.__ModuleLoader__.load({
                   null,
                   hist.entries.length === 0
                     ? React.createElement('div', { className: 'lep-hist__empty' }, t('empty'))
-                    : React.createElement('ul', { className: 'lep-hist__list' }, hist.entries.map((e, i) => renderEntry(e, i))),
+                    : React.createElement('ul', { className: 'lep-hist__list' }, listModel.map((item, i) => (item.entries ? renderGroup(item.entries) : renderEntry(item.e, i)))),
                   React.createElement(
                     'div',
                     { className: 'lep-hist__nav' },
