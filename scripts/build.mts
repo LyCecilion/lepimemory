@@ -16,10 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import {
-  NODE_VERSION,
-  PNPM_VERSION,
-} from '../dsh/plugins/dsh-lepimemory-state/src/shared/pins.ts';
+import { NODE_VERSION, PNPM_VERSION } from '../dsh/plugins/dsh-lepimemory-state/src/shared/pins.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -184,6 +181,8 @@ try {
     process.stderr.write(`lepimemory-build: ${error.message}\n`);
     process.exit(1);
   }
-  process.stderr.write(`lepimemory-build: unexpected error: ${(error as Error)?.stack ?? String(error)}\n`);
+  process.stderr.write(
+    `lepimemory-build: unexpected error: ${(error as Error)?.stack ?? String(error)}\n`,
+  );
   process.exit(1);
 }

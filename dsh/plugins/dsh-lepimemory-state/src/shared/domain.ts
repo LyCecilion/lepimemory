@@ -29,10 +29,7 @@ export type Origin = 'user' | 'action' | 'inference';
 export type Sensitivity = 'ordinary' | 'private' | 'excluded';
 export type Occurrence = 'planned' | 'reported' | 'verified' | 'unknown';
 export type GrantMatch = 'covered' | 'not_covered' | 'uncertain';
-export type ObservationReasonCode =
-  | 'source_entailed'
-  | 'source_unsupported'
-  | 'source_unavailable';
+export type ObservationReasonCode = 'source_entailed' | 'source_unsupported' | 'source_unavailable';
 export type AdmissionVerdict = 'accept' | 'defer' | 'reject';
 export type AdmissionReasonCode =
   | 'explicit_request'

@@ -75,8 +75,15 @@ export const CONTROL_KINDS: ContractEnumList<ControlKind> = closedList<ControlKi
   'grant',
   'revoke',
 ]);
-export const RECALL_PURPOSES: ContractEnumList<RecallPurpose> = closedList<RecallPurpose>(['current', 'history']);
-export const SCOPE_KINDS: ContractEnumList<ScopeKind> = closedList<ScopeKind>(['item', 'topic', 'continuous']);
+export const RECALL_PURPOSES: ContractEnumList<RecallPurpose> = closedList<RecallPurpose>([
+  'current',
+  'history',
+]);
+export const SCOPE_KINDS: ContractEnumList<ScopeKind> = closedList<ScopeKind>([
+  'item',
+  'topic',
+  'continuous',
+]);
 export const CONTENT_KINDS: ContractEnumList<ContentKind> = closedList<ContentKind>([
   'stable_fact',
   'preference',
@@ -85,27 +92,59 @@ export const CONTENT_KINDS: ContractEnumList<ContentKind> = closedList<ContentKi
   'temporary_state',
   'other',
 ]);
-export const ORIGINS: ContractEnumList<Origin> = closedList<Origin>(['user', 'action', 'inference']);
-export const SENSITIVITIES: ContractEnumList<Sensitivity> = closedList<Sensitivity>(['ordinary', 'private', 'excluded']);
-export const OCCURRENCES: ContractEnumList<Occurrence> = closedList<Occurrence>(['planned', 'reported', 'verified', 'unknown']);
-export const GRANT_MATCHES: ContractEnumList<GrantMatch> = closedList<GrantMatch>(['covered', 'not_covered', 'uncertain']);
+export const ORIGINS: ContractEnumList<Origin> = closedList<Origin>([
+  'user',
+  'action',
+  'inference',
+]);
+export const SENSITIVITIES: ContractEnumList<Sensitivity> = closedList<Sensitivity>([
+  'ordinary',
+  'private',
+  'excluded',
+]);
+export const OCCURRENCES: ContractEnumList<Occurrence> = closedList<Occurrence>([
+  'planned',
+  'reported',
+  'verified',
+  'unknown',
+]);
+export const GRANT_MATCHES: ContractEnumList<GrantMatch> = closedList<GrantMatch>([
+  'covered',
+  'not_covered',
+  'uncertain',
+]);
 export const GRANT_REASON_CODES: ContractEnumList<GrantMatch> = GRANT_MATCHES;
-export const OBSERVATION_REASON_CODES: ContractEnumList<ObservationReasonCode> = closedList<ObservationReasonCode>([
-  'source_entailed',
-  'source_unsupported',
-  'source_unavailable',
+export const OBSERVATION_REASON_CODES: ContractEnumList<ObservationReasonCode> =
+  closedList<ObservationReasonCode>([
+    'source_entailed',
+    'source_unsupported',
+    'source_unavailable',
+  ]);
+export const ADMISSION_VERDICTS: ContractEnumList<AdmissionVerdict> = closedList<AdmissionVerdict>([
+  'accept',
+  'defer',
+  'reject',
 ]);
-export const ADMISSION_VERDICTS: ContractEnumList<AdmissionVerdict> = closedList<AdmissionVerdict>(['accept', 'defer', 'reject']);
-export const ADMISSION_REASON_CODES: ContractEnumList<AdmissionReasonCode> = closedList<AdmissionReasonCode>([
-  'explicit_request',
-  'value_accept',
-  'value_reject',
-  'value_uncertain',
-  'backend_unavailable',
-  'input_truncated',
+export const ADMISSION_REASON_CODES: ContractEnumList<AdmissionReasonCode> =
+  closedList<AdmissionReasonCode>([
+    'explicit_request',
+    'value_accept',
+    'value_reject',
+    'value_uncertain',
+    'backend_unavailable',
+    'input_truncated',
+  ]);
+export const HISTORY_DECISIONS: ContractEnumList<HistoryDecision> = closedList<HistoryDecision>([
+  'keep',
+  'sanitize',
+  'remove',
 ]);
-export const HISTORY_DECISIONS: ContractEnumList<HistoryDecision> = closedList<HistoryDecision>(['keep', 'sanitize', 'remove']);
-export const SOURCE_ACTORS: ContractEnumList<SourceActor> = closedList<SourceActor>(['user', 'assistant', 'action', 'context']);
+export const SOURCE_ACTORS: ContractEnumList<SourceActor> = closedList<SourceActor>([
+  'user',
+  'assistant',
+  'action',
+  'context',
+]);
 /** 公共 action 证据的 kind：仅来自 journal 确认已执行的行动。 */
 export const VERIFIED_ACTION_KIND = 'verified_action';
 /** 单次 extraction 候选上限。 */
@@ -271,7 +310,13 @@ const HISTORY_NODE_SCHEMA: JsonSchemaNode = {
 };
 
 /** submit_result 的 kind 集合。 */
-export type ContractKind = 'control' | 'extract' | 'grant' | 'observation' | 'history' | 'admission';
+export type ContractKind =
+  | 'control'
+  | 'extract'
+  | 'grant'
+  | 'observation'
+  | 'history'
+  | 'admission';
 
 /** 每个 kind 的 wire schema。 */
 export const SCHEMAS: Record<ContractKind, WireSchema> = Object.freeze({
@@ -363,12 +408,13 @@ for (const schema of Object.values(SCHEMAS)) assertSupportedJsonSchema(schema);
 for (const schema of Object.values(TOOL_SCHEMAS)) assertSupportedJsonSchema(schema);
 
 /** verdict → 允许的 reason_code（封闭映射，禁止自由文本/伪造概率）。 */
-const ADMISSION_REASONS_BY_VERDICT: Readonly<Partial<Record<AdmissionVerdict, readonly AdmissionReasonCode[]>>> =
-  Object.freeze({
-    accept: ['explicit_request', 'value_accept'],
-    reject: ['value_reject'],
-    defer: ['value_uncertain', 'backend_unavailable', 'input_truncated'],
-  });
+const ADMISSION_REASONS_BY_VERDICT: Readonly<
+  Partial<Record<AdmissionVerdict, readonly AdmissionReasonCode[]>>
+> = Object.freeze({
+  accept: ['explicit_request', 'value_accept'],
+  reject: ['value_reject'],
+  defer: ['value_uncertain', 'backend_unavailable', 'input_truncated'],
+});
 
 // ── 校验后成立的 wire 值形状（union 取自 ./shared/domain.ts）──────────────
 /** 合并前的单条 control 请求（schema 已保证字段齐备）。 */
@@ -431,7 +477,13 @@ export interface AdmissionValue {
   reason_code: AdmissionReasonCode;
 }
 /** `validateResult` 的返回值联合。 */
-export type ContractValue = ControlValue | ExtractValue | GrantValue | ObservationValue | HistoryValue | AdmissionValue;
+export type ContractValue =
+  | ControlValue
+  | ExtractValue
+  | GrantValue
+  | ObservationValue
+  | HistoryValue
+  | AdmissionValue;
 
 /** 契约层只读取的来源最小面（真实来源仍是调用方的 map/记录）。 */
 export interface ContractSourceLike {
@@ -465,13 +517,17 @@ function tokenizePath(path: string): PathToken[] {
 }
 
 /** 沿 schema 已声明结构下行一步；不匹配（含未知键）返回 null。 */
-function descend(node: JsonSchemaNode | undefined, token: PathToken): { schema: JsonSchemaNode; suffix: string } | null {
+function descend(
+  node: JsonSchemaNode | undefined,
+  token: PathToken,
+): { schema: JsonSchemaNode; suffix: string } | null {
   if (node === undefined || node === null || typeof node !== 'object') return null;
   if ('index' in token) {
     if (node.items !== undefined) return { schema: node.items, suffix: `[${token.index}]` };
     if (Array.isArray(node.oneOf)) {
       for (const branch of node.oneOf) {
-        if (branch && branch.items !== undefined) return { schema: branch.items, suffix: `[${token.index}]` };
+        if (branch && branch.items !== undefined)
+          return { schema: branch.items, suffix: `[${token.index}]` };
       }
     }
     return null;
@@ -482,7 +538,11 @@ function descend(node: JsonSchemaNode | undefined, token: PathToken): { schema: 
   }
   if (Array.isArray(node.oneOf)) {
     for (const branch of node.oneOf) {
-      if (branch && branch.properties && Object.prototype.hasOwnProperty.call(branch.properties, key)) {
+      if (
+        branch &&
+        branch.properties &&
+        Object.prototype.hasOwnProperty.call(branch.properties, key)
+      ) {
         return { schema: branch.properties[key]!, suffix: `.${key}` };
       }
     }
@@ -569,7 +629,9 @@ function unique<T>(values: readonly T[]): T[] {
 }
 
 /** 合并同 kind 的 control 请求（并集 ID；scope 取首个非空），不复制正文。 */
-export function mergeControlRequests(requests: readonly ControlRequestWire[]): ControlRequestWire[] {
+export function mergeControlRequests(
+  requests: readonly ControlRequestWire[],
+): ControlRequestWire[] {
   const merged: ControlRequestWire[] = [];
   const byKind = new Map<ControlKind, ControlRequestWire>();
   for (const request of requests) {
@@ -596,25 +658,30 @@ function assertCandidateTimes(candidate: CandidateDraft, index: number): void {
   const keys = ['valid_from', 'valid_until', 'occurred_start', 'occurred_end'] as const;
   for (const key of keys) {
     const value = candidate[key];
-    if (value !== null && !isIso(value)) throw new ContractError(ContractIssues.RANGE, `candidates[${index}].${key}`);
+    if (value !== null && !isIso(value))
+      throw new ContractError(ContractIssues.RANGE, `candidates[${index}].${key}`);
   }
 }
 
 function assertOrigin(origin: Origin, actors: readonly ContractSourceLike[], index: number): void {
   if (origin === 'user') {
-    if (!actors.every((source) => source.actor === 'user')) throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
+    if (!actors.every((source) => source.actor === 'user'))
+      throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
     return;
   }
   if (origin === 'action') {
     if (!actors.every((source) => source.actor === 'user' || source.actor === 'action'))
       throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
-    if (!actors.some((source) => source.actor === 'action' && source.kind === VERIFIED_ACTION_KIND)) {
+    if (
+      !actors.some((source) => source.actor === 'action' && source.kind === VERIFIED_ACTION_KIND)
+    ) {
       throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
     }
     return;
   }
   // inference：只认公共 assistant 文本。
-  if (!actors.every((source) => source.actor === 'assistant')) throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
+  if (!actors.every((source) => source.actor === 'assistant'))
+    throw new ContractError(ContractIssues.ACTOR, `candidates[${index}].source_ids`);
 }
 
 function validateControl(
@@ -626,71 +693,111 @@ function validateControl(
   const requests = mergeControlRequests(value.requests);
   for (let i = 0; i < requests.length; i++) {
     const request = requests[i]!;
-    if (request.source_ids.length === 0) throw new ContractError(ContractIssues.SCHEMA, `requests[${i}].source_ids`);
+    if (request.source_ids.length === 0)
+      throw new ContractError(ContractIssues.SCHEMA, `requests[${i}].source_ids`);
     // Only a real user source can authorize a control request.
     for (let j = 0; j < request.source_ids.length; j++) {
-      const source = requireSource(lookup, request.source_ids[j]!, `requests[${i}].source_ids[${j}]`);
+      const source = requireSource(
+        lookup,
+        request.source_ids[j]!,
+        `requests[${i}].source_ids[${j}]`,
+      );
       const sourceId = source.id;
-      if (source.actor !== 'user' || (primarySourceIds && (typeof sourceId !== 'string' || !primarySourceIds.has(sourceId))))
+      if (
+        source.actor !== 'user' ||
+        (primarySourceIds && (typeof sourceId !== 'string' || !primarySourceIds.has(sourceId)))
+      )
         throw new ContractError(ContractIssues.ACTOR, `requests[${i}].source_ids[${j}]`);
     }
     for (let j = 0; j < request.candidate_ids.length; j++) {
       if (!candidateIds.has(request.candidate_ids[j]!))
         throw new ContractError(ContractIssues.CANDIDATE, `requests[${i}].candidate_ids[${j}]`);
     }
-    if (request.scope !== null && request.scope.expires_at !== null && !isIso(request.scope.expires_at)) {
+    if (
+      request.scope !== null &&
+      request.scope.expires_at !== null &&
+      !isIso(request.scope.expires_at)
+    ) {
       throw new ContractError(ContractIssues.RANGE, `requests[${i}].scope.expires_at`);
     }
   }
   for (let i = 0; i < value.context_guards.length; i++) {
     const guard = value.context_guards[i]!;
-    if (guard.source_ids.length === 0) throw new ContractError(ContractIssues.SCHEMA, `context_guards[${i}].source_ids`);
+    if (guard.source_ids.length === 0)
+      throw new ContractError(ContractIssues.SCHEMA, `context_guards[${i}].source_ids`);
     for (let j = 0; j < guard.source_ids.length; j++) {
-      const source = requireSource(lookup, guard.source_ids[j]!, `context_guards[${i}].source_ids[${j}]`);
+      const source = requireSource(
+        lookup,
+        guard.source_ids[j]!,
+        `context_guards[${i}].source_ids[${j}]`,
+      );
       const sourceId = source.id;
-      if (source.actor !== 'user' || (primarySourceIds && (typeof sourceId !== 'string' || !primarySourceIds.has(sourceId))))
+      if (
+        source.actor !== 'user' ||
+        (primarySourceIds && (typeof sourceId !== 'string' || !primarySourceIds.has(sourceId)))
+      )
         throw new ContractError(ContractIssues.ACTOR, `context_guards[${i}].source_ids[${j}]`);
     }
   }
   return { requests, recall_purpose: value.recall_purpose, context_guards: value.context_guards };
 }
 
-function validateExtract(value: ExtractValue, lookup: SourceLookup, primarySourceIds?: Set<string>): void {
-  if (value.candidates.length > EXTRACT_MAX_CANDIDATES) throw new ContractError(ContractIssues.LIMIT, 'candidates');
+function validateExtract(
+  value: ExtractValue,
+  lookup: SourceLookup,
+  primarySourceIds?: Set<string>,
+): void {
+  if (value.candidates.length > EXTRACT_MAX_CANDIDATES)
+    throw new ContractError(ContractIssues.LIMIT, 'candidates');
   for (let i = 0; i < value.candidates.length; i++) {
     const candidate = value.candidates[i]!;
     if (candidate.text.length === 0 || candidate.text.length > CANDIDATE_TEXT_MAX)
       throw new ContractError(ContractIssues.LIMIT, `candidates[${i}].text`);
-    if (candidate.source_ids.length === 0) throw new ContractError(ContractIssues.SCHEMA, `candidates[${i}].source_ids`);
+    if (candidate.source_ids.length === 0)
+      throw new ContractError(ContractIssues.SCHEMA, `candidates[${i}].source_ids`);
     const actors: ContractSourceLike[] = [];
     for (let j = 0; j < candidate.source_ids.length; j++) {
       const id = candidate.source_ids[j]!;
-      if (primarySourceIds && !primarySourceIds.has(id)) throw new ContractError(ContractIssues.ACTOR, `candidates[${i}].source_ids[${j}]`);
+      if (primarySourceIds && !primarySourceIds.has(id))
+        throw new ContractError(ContractIssues.ACTOR, `candidates[${i}].source_ids[${j}]`);
       actors.push(requireSource(lookup, id, `candidates[${i}].source_ids[${j}]`));
     }
     assertOrigin(candidate.origin, actors, i);
     if (candidate.occurrence === 'verified' && candidate.origin !== 'action')
       throw new ContractError(ContractIssues.ACTOR, `candidates[${i}].occurrence`);
     assertCandidateTimes(candidate, i);
-    if (candidate.valid_from !== null && candidate.valid_until !== null && Date.parse(candidate.valid_from) > Date.parse(candidate.valid_until)) {
+    if (
+      candidate.valid_from !== null &&
+      candidate.valid_until !== null &&
+      Date.parse(candidate.valid_from) > Date.parse(candidate.valid_until)
+    ) {
       throw new ContractError(ContractIssues.RANGE, `candidates[${i}].valid_until`);
     }
-    if (candidate.occurred_start !== null && candidate.occurred_end !== null && Date.parse(candidate.occurred_start) > Date.parse(candidate.occurred_end)) {
+    if (
+      candidate.occurred_start !== null &&
+      candidate.occurred_end !== null &&
+      Date.parse(candidate.occurred_start) > Date.parse(candidate.occurred_end)
+    ) {
       throw new ContractError(ContractIssues.RANGE, `candidates[${i}].occurred_end`);
     }
   }
 }
 
 function validateGrant(value: GrantValue, lookup: SourceLookup): void {
-  if (value.reason_code !== value.match) throw new ContractError(ContractIssues.REASON, 'reason_code');
-  for (let i = 0; i < value.source_ids.length; i++) requireSource(lookup, value.source_ids[i]!, `source_ids[${i}]`);
+  if (value.reason_code !== value.match)
+    throw new ContractError(ContractIssues.REASON, 'reason_code');
+  for (let i = 0; i < value.source_ids.length; i++)
+    requireSource(lookup, value.source_ids[i]!, `source_ids[${i}]`);
 }
 
 function validateObservation(value: ObservationValue, lookup: SourceLookup): void {
-  for (let i = 0; i < value.used_source_ids.length; i++) requireSource(lookup, value.used_source_ids[i]!, `used_source_ids[${i}]`);
+  for (let i = 0; i < value.used_source_ids.length; i++)
+    requireSource(lookup, value.used_source_ids[i]!, `used_source_ids[${i}]`);
   if (value.safe) {
-    if (value.reason_code !== 'source_entailed') throw new ContractError(ContractIssues.REASON, 'reason_code');
-    if (value.used_source_ids.length === 0) throw new ContractError(ContractIssues.SCHEMA, 'used_source_ids');
+    if (value.reason_code !== 'source_entailed')
+      throw new ContractError(ContractIssues.REASON, 'reason_code');
+    if (value.used_source_ids.length === 0)
+      throw new ContractError(ContractIssues.SCHEMA, 'used_source_ids');
   } else if (value.reason_code === 'source_entailed') {
     throw new ContractError(ContractIssues.REASON, 'reason_code');
   }
@@ -702,11 +809,16 @@ function historyBlocks(node: unknown): { seq: number; blocks: readonly unknown[]
   if (!('seq' in node) || typeof node.seq !== 'number' || !Number.isInteger(node.seq)) return null;
   const seq = node.seq;
   if ('blocks' in node && Array.isArray(node.blocks)) return { seq, blocks: node.blocks };
-  if ('text' in node && typeof node.text === 'string') return { seq, blocks: [{ block_index: 0, text: node.text }] };
+  if ('text' in node && typeof node.text === 'string')
+    return { seq, blocks: [{ block_index: 0, text: node.text }] };
   return { seq, blocks: [] };
 }
 
-function validateHistory(value: HistoryValue, lookup: SourceLookup, historyNodes: readonly unknown[]): void {
+function validateHistory(
+  value: HistoryValue,
+  lookup: SourceLookup,
+  historyNodes: readonly unknown[],
+): void {
   const known = new Map<number, readonly unknown[]>();
   for (const node of Array.isArray(historyNodes) ? historyNodes : []) {
     const parsed = historyBlocks(node);
@@ -715,22 +827,31 @@ function validateHistory(value: HistoryValue, lookup: SourceLookup, historyNodes
   const seenSeqs = new Set<number>();
   for (let i = 0; i < value.nodes.length; i++) {
     const node = value.nodes[i]!;
-    if (!known.has(node.seq)) throw new ContractError(ContractIssues.HISTORY_SEQ, `nodes[${i}].seq`);
+    if (!known.has(node.seq))
+      throw new ContractError(ContractIssues.HISTORY_SEQ, `nodes[${i}].seq`);
     if (seenSeqs.has(node.seq)) throw new ContractError(ContractIssues.SCHEMA, `nodes[${i}].seq`);
     seenSeqs.add(node.seq);
-    if (node.decision === 'remove' && node.keep_spans.length > 0) throw new ContractError(ContractIssues.SCHEMA, `nodes[${i}].keep_spans`);
+    if (node.decision === 'remove' && node.keep_spans.length > 0)
+      throw new ContractError(ContractIssues.SCHEMA, `nodes[${i}].keep_spans`);
     const byIndex = new Map<number, string>();
     for (const block of known.get(node.seq) ?? []) {
-      if (!block || typeof block !== 'object' || !('block_index' in block) || !('text' in block)) continue;
+      if (!block || typeof block !== 'object' || !('block_index' in block) || !('text' in block))
+        continue;
       const blockIndex = block.block_index;
       const text = block.text;
-      if (typeof blockIndex !== 'number' || !Number.isInteger(blockIndex) || typeof text !== 'string') continue;
+      if (
+        typeof blockIndex !== 'number' ||
+        !Number.isInteger(blockIndex) ||
+        typeof text !== 'string'
+      )
+        continue;
       byIndex.set(blockIndex, text);
     }
     for (let k = 0; k < node.keep_spans.length; k++) {
       const span = node.keep_spans[k]!;
       const text = byIndex.get(span.block_index);
-      if (text === undefined) throw new ContractError(ContractIssues.RANGE, `nodes[${i}].keep_spans[${k}].block_index`);
+      if (text === undefined)
+        throw new ContractError(ContractIssues.RANGE, `nodes[${i}].keep_spans[${k}].block_index`);
       if (!(span.start >= 0 && span.start <= span.end && span.end <= text.length))
         throw new ContractError(ContractIssues.RANGE, `nodes[${i}].keep_spans[${k}]`);
       for (let j = 0; j < span.source_ids.length; j++) {
@@ -739,13 +860,15 @@ function validateHistory(value: HistoryValue, lookup: SourceLookup, historyNodes
     }
   }
   for (let i = 0; i < value.uncertain_seqs.length; i++) {
-    if (!known.has(value.uncertain_seqs[i]!)) throw new ContractError(ContractIssues.HISTORY_SEQ, `uncertain_seqs[${i}]`);
+    if (!known.has(value.uncertain_seqs[i]!))
+      throw new ContractError(ContractIssues.HISTORY_SEQ, `uncertain_seqs[${i}]`);
   }
 }
 
 function validateAdmission(value: AdmissionValue): void {
   const allowed = ADMISSION_REASONS_BY_VERDICT[value.verdict];
-  if (allowed === undefined || !allowed.includes(value.reason_code)) throw new ContractError(ContractIssues.REASON, 'reason_code');
+  if (allowed === undefined || !allowed.includes(value.reason_code))
+    throw new ContractError(ContractIssues.REASON, 'reason_code');
 }
 
 /**
@@ -755,14 +878,21 @@ function validateAdmission(value: AdmissionValue): void {
  * @returns 已校验值（control 为同 kind 合并后的结果）。
  * @throws {ContractError}
  */
-export function validateResult(kind: ContractKind, value: unknown, options: ValidateOptions = {}): ContractValue {
+export function validateResult(
+  kind: ContractKind,
+  value: unknown,
+  options: ValidateOptions = {},
+): ContractValue {
   const schema: WireSchema | undefined = SCHEMAS[kind];
   if (schema === undefined) throw new ContractError(ContractIssues.SCHEMA, null);
   const structural = checkSchema(schema, value);
   if (structural !== null) throw structural;
   const lookup = sourceLookup(options.sources);
-  const candidateIds = new Set<string>(Array.isArray(options.candidateIds) ? options.candidateIds : []);
-  if (kind === 'control') return validateControl(value as ControlValue, lookup, candidateIds, options.primarySourceIds);
+  const candidateIds = new Set<string>(
+    Array.isArray(options.candidateIds) ? options.candidateIds : [],
+  );
+  if (kind === 'control')
+    return validateControl(value as ControlValue, lookup, candidateIds, options.primarySourceIds);
   if (kind === 'extract') {
     validateExtract(value as ExtractValue, lookup, options.primarySourceIds);
     return value as ExtractValue;
@@ -791,20 +921,37 @@ export function validateResult(kind: ContractKind, value: unknown, options: Vali
  * @throws {ContractError}
  */
 export function validateToolArgs(name: string, args: unknown): unknown {
-  const schema = name === 'fetch_context' ? TOOL_SCHEMAS.fetch_context : name === 'fetch_memory' ? TOOL_SCHEMAS.fetch_memory : undefined;
+  const schema =
+    name === 'fetch_context'
+      ? TOOL_SCHEMAS.fetch_context
+      : name === 'fetch_memory'
+        ? TOOL_SCHEMAS.fetch_memory
+        : undefined;
   if (schema === undefined) throw new ContractError(ContractIssues.TOOL_ARGS, null);
   const structural = checkSchema(schema, args);
   if (structural !== null) throw structural;
   if (name === 'fetch_context') {
-    if (args && typeof args === 'object' && 'source_ids' in args && Array.isArray(args.source_ids)) {
+    if (
+      args &&
+      typeof args === 'object' &&
+      'source_ids' in args &&
+      Array.isArray(args.source_ids)
+    ) {
       const ids = args.source_ids;
       for (let i = 0; i < ids.length; i++) {
         const id = ids[i];
-        if (typeof id === 'string' && id.length === 0) throw new ContractError(ContractIssues.TOOL_ARGS, `source_ids[${i}]`);
+        if (typeof id === 'string' && id.length === 0)
+          throw new ContractError(ContractIssues.TOOL_ARGS, `source_ids[${i}]`);
       }
     }
   } else if (name === 'fetch_memory') {
-    if (args && typeof args === 'object' && 'query' in args && typeof args.query === 'string' && args.query.length === 0) {
+    if (
+      args &&
+      typeof args === 'object' &&
+      'query' in args &&
+      typeof args.query === 'string' &&
+      args.query.length === 0
+    ) {
       throw new ContractError(ContractIssues.TOOL_ARGS, 'query');
     }
   }

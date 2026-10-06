@@ -7,65 +7,65 @@
 // ── 状态结构 ─────────────────────────────────────────────────────────
 // 初始值＝基线（先写死待实测），对齐 DESIGN_NOTES.md §1.4：先少而正交；mood 短期、relation 长期。
 export const BASELINE = {
-    valence: 0,
-    arousal: 0.4,
-    trust: 0.3,
-    closeness: 0.2,
-    familiarity: 0.1,
+  valence: 0,
+  arousal: 0.4,
+  trust: 0.3,
+  closeness: 0.2,
+  familiarity: 0.1,
 };
 
 /** 数值字段及其允许区间：valence ∈ [-1,1]，arousal / trust / closeness / familiarity ∈ [0,1]。 */
 export const NUMERIC_FIELDS: ReadonlyArray<readonly [string, number, number]> = [
-    ["mood.valence", -1, 1],
-    ["mood.arousal", 0, 1],
-    ["relation.trust", 0, 1],
-    ["relation.closeness", 0, 1],
-    ["relation.familiarity", 0, 1],
+  ['mood.valence', -1, 1],
+  ['mood.arousal', 0, 1],
+  ['relation.trust', 0, 1],
+  ['relation.closeness', 0, 1],
+  ['relation.familiarity', 0, 1],
 ];
 
 /** 状态维度：五个数值字段的短名（BASELINE / 渲染表按此索引）。 */
-export type StateDimension = "valence" | "arousal" | "trust" | "closeness" | "familiarity";
+export type StateDimension = 'valence' | 'arousal' | 'trust' | 'closeness' | 'familiarity';
 /** 两个状态分组。 */
-export type StateGroup = "mood" | "relation";
+export type StateGroup = 'mood' | 'relation';
 
 export interface MoodState {
-    valence: number;
-    arousal: number;
-    updatedAt: string;
+  valence: number;
+  arousal: number;
+  updatedAt: string;
 }
 export interface RelationState {
-    trust: number;
-    closeness: number;
-    familiarity: number;
+  trust: number;
+  closeness: number;
+  familiarity: number;
 }
 export interface StateReason {
-    dimension: StateGroup;
-    text: string;
-    at: string;
+  dimension: StateGroup;
+  text: string;
+  at: string;
 }
 /** 已校验的运行时状态对象。 */
 export interface LepiState {
-    mood: MoodState;
-    relation: RelationState;
-    reasons: StateReason[];
+  mood: MoodState;
+  relation: RelationState;
+  reasons: StateReason[];
 }
 
-const TOP_KEYS = new Set(["mood", "relation", "reasons"]);
-const MOOD_KEYS = new Set(["valence", "arousal", "updatedAt"]);
-const RELATION_KEYS = new Set(["trust", "closeness", "familiarity"]);
-const REASON_KEYS = new Set(["dimension", "text", "at"]);
-const REASON_DIMENSIONS = new Set(["mood", "relation"]);
+const TOP_KEYS = new Set(['mood', 'relation', 'reasons']);
+const MOOD_KEYS = new Set(['valence', 'arousal', 'updatedAt']);
+const RELATION_KEYS = new Set(['trust', 'closeness', 'familiarity']);
+const REASON_KEYS = new Set(['dimension', 'text', 'at']);
+const REASON_DIMENSIONS = new Set(['mood', 'relation']);
 
 export function initialState(now: string = new Date().toISOString()): LepiState {
-    return {
-        mood: { valence: BASELINE.valence, arousal: BASELINE.arousal, updatedAt: now },
-        relation: {
-            trust: BASELINE.trust,
-            closeness: BASELINE.closeness,
-            familiarity: BASELINE.familiarity,
-        },
-        reasons: [],
-    };
+  return {
+    mood: { valence: BASELINE.valence, arousal: BASELINE.arousal, updatedAt: now },
+    relation: {
+      trust: BASELINE.trust,
+      closeness: BASELINE.closeness,
+      familiarity: BASELINE.familiarity,
+    },
+    reasons: [],
+  };
 }
 
 // ── 校验（手写、逐字段；含白名单键，拼错也能报出名字）──────────────────
@@ -73,20 +73,20 @@ export function initialState(now: string = new Date().toISOString()): LepiState 
 export type ValidationResult = { ok: true } | { ok: false; error: string };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function describe(value: unknown): string {
-    if (typeof value === "string") return JSON.stringify(value);
-    if (value === undefined) return "undefined";
-    if (value === null) return "null";
-    if (Array.isArray(value)) return "数组";
-    if (typeof value === "object") return "对象";
-    return String(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return '数组';
+  if (typeof value === 'object') return '对象';
+  return String(value);
 }
 
 function isParseableTime(value: unknown): boolean {
-    return typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value));
+  return typeof value === 'string' && value.length > 0 && !Number.isNaN(Date.parse(value));
 }
 
 /**
@@ -94,67 +94,67 @@ function isParseableTime(value: unknown): boolean {
  * error 消息含**具体字段路径**（如 mood.valence），便于定位。
  */
 export function validateState(value: unknown): ValidationResult {
-    const fail = (fieldPath: string, detail: string): ValidationResult => ({
-        ok: false,
-        error: `lepimemory-state: 状态字段 "${fieldPath}" 无效：${detail}`,
-    });
+  const fail = (fieldPath: string, detail: string): ValidationResult => ({
+    ok: false,
+    error: `lepimemory-state: 状态字段 "${fieldPath}" 无效：${detail}`,
+  });
 
-    if (!isPlainObject(value)) return fail("(<root>)", `期望对象，实际 ${describe(value)}`);
-    for (const key of Object.keys(value)) {
-        if (!TOP_KEYS.has(key)) return fail(key, "未知字段（拼写错误？）");
-    }
+  if (!isPlainObject(value)) return fail('(<root>)', `期望对象，实际 ${describe(value)}`);
+  for (const key of Object.keys(value)) {
+    if (!TOP_KEYS.has(key)) return fail(key, '未知字段（拼写错误？）');
+  }
 
-    for (const [group, allowed] of [
-        ["mood", MOOD_KEYS],
-        ["relation", RELATION_KEYS],
-    ] as const) {
-        const g = value[group];
-        if (!isPlainObject(g)) return fail(group, `期望对象，实际 ${describe(g)}`);
-        for (const key of Object.keys(g)) {
-            if (!allowed.has(key)) return fail(`${group}.${key}`, "未知字段（拼写错误？）");
-        }
+  for (const [group, allowed] of [
+    ['mood', MOOD_KEYS],
+    ['relation', RELATION_KEYS],
+  ] as const) {
+    const g = value[group];
+    if (!isPlainObject(g)) return fail(group, `期望对象，实际 ${describe(g)}`);
+    for (const key of Object.keys(g)) {
+      if (!allowed.has(key)) return fail(`${group}.${key}`, '未知字段（拼写错误？）');
     }
+  }
 
-    for (const [fieldPath, lo, hi] of NUMERIC_FIELDS) {
-        const [group, field] = fieldPath.split(".") as [string, string];
-        const groupValue = value[group] as Record<string, unknown>;
-        const v = groupValue[field];
-        if (typeof v !== "number" || !Number.isFinite(v)) {
-            return fail(fieldPath, `期望 ${lo}~${hi} 数值，实际 ${describe(v)}`);
-        }
-        if (v < lo || v > hi) return fail(fieldPath, `期望 ${lo}~${hi} 数值，实际 ${v}`);
+  for (const [fieldPath, lo, hi] of NUMERIC_FIELDS) {
+    const [group, field] = fieldPath.split('.') as [string, string];
+    const groupValue = value[group] as Record<string, unknown>;
+    const v = groupValue[field];
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      return fail(fieldPath, `期望 ${lo}~${hi} 数值，实际 ${describe(v)}`);
     }
+    if (v < lo || v > hi) return fail(fieldPath, `期望 ${lo}~${hi} 数值，实际 ${v}`);
+  }
 
-    const moodValue = value.mood as Record<string, unknown>;
-    if (!isParseableTime(moodValue.updatedAt)) {
-        return fail("mood.updatedAt", `期望可解析的时间串，实际 ${describe(moodValue.updatedAt)}`);
-    }
+  const moodValue = value.mood as Record<string, unknown>;
+  if (!isParseableTime(moodValue.updatedAt)) {
+    return fail('mood.updatedAt', `期望可解析的时间串，实际 ${describe(moodValue.updatedAt)}`);
+  }
 
-    if (!Array.isArray(value.reasons)) {
-        return fail("reasons", `期望数组，实际 ${describe(value.reasons)}`);
+  if (!Array.isArray(value.reasons)) {
+    return fail('reasons', `期望数组，实际 ${describe(value.reasons)}`);
+  }
+  for (let i = 0; i < value.reasons.length; i += 1) {
+    const reason = value.reasons[i];
+    const at = `reasons[${i}]`;
+    if (!isPlainObject(reason)) return fail(at, `期望对象，实际 ${describe(reason)}`);
+    for (const key of Object.keys(reason)) {
+      if (!REASON_KEYS.has(key)) return fail(`${at}.${key}`, '未知字段（拼写错误？）');
     }
-    for (let i = 0; i < value.reasons.length; i += 1) {
-        const reason = value.reasons[i];
-        const at = `reasons[${i}]`;
-        if (!isPlainObject(reason)) return fail(at, `期望对象，实际 ${describe(reason)}`);
-        for (const key of Object.keys(reason)) {
-            if (!REASON_KEYS.has(key)) return fail(`${at}.${key}`, "未知字段（拼写错误？）");
-        }
-        if (!REASON_DIMENSIONS.has(reason.dimension as string)) {
-            return fail(
-                `${at}.dimension`,
-                `期望 ${[...REASON_DIMENSIONS].join(" / ")}，实际 ${describe(reason.dimension)}`,
-            );
-        }
-        if (typeof reason.text !== "string") {
-            return fail(`${at}.text`, `期望字符串，实际 ${describe(reason.text)}`);
-        }
-        if (!isParseableTime(reason.at)) {
-            return fail(`${at}.at`, `期望可解析的时间串，实际 ${describe(reason.at)}`);
-        }
+    if (!REASON_DIMENSIONS.has(reason.dimension as string)) {
+      return fail(
+        `${at}.dimension`,
+        `期望 ${[...REASON_DIMENSIONS].join(' / ')}，实际 ${describe(reason.dimension)}`,
+      );
     }
+    if (typeof reason.text !== 'string') {
+      return fail(`${at}.text`, `期望字符串，实际 ${describe(reason.text)}`);
+    }
+    if (!isParseableTime(reason.at)) {
+      return fail(`${at}.at`, `期望可解析的时间串，实际 ${describe(reason.at)}`);
+    }
+  }
 
-    return { ok: true };
+  return { ok: true };
 }
 
 // ── 渲染（不出现数值；只渲染偏离最大的至多 3 项 + 原因 + 行为倾向）────────
@@ -164,66 +164,66 @@ const STRONG = 0.25; // |Δ| ≥ 0.25 → 「明显」
 const BOUNDARY_EPSILON = 1e-9;
 
 /** 心境基调（供 Lv3 立绘与面板状态条共用）：按 valence 相对基线的偏移分三档。 */
-export function toneOf(state: LepiState): "bright" | "plain" | "low" {
-    const dv = state.mood.valence - BASELINE.valence;
-    if (dv >= MILD - BOUNDARY_EPSILON) return "bright";
-    if (dv <= -MILD + BOUNDARY_EPSILON) return "low";
-    return "plain";
+export function toneOf(state: LepiState): 'bright' | 'plain' | 'low' {
+  const dv = state.mood.valence - BASELINE.valence;
+  if (dv >= MILD - BOUNDARY_EPSILON) return 'bright';
+  if (dv <= -MILD + BOUNDARY_EPSILON) return 'low';
+  return 'plain';
 }
 /** 关系亲近基调：closeness 高出基线至少一档。 */
 export function nearOf(state: LepiState): boolean {
-    return state.relation.closeness - BASELINE.closeness >= MILD - BOUNDARY_EPSILON;
+  return state.relation.closeness - BASELINE.closeness >= MILD - BOUNDARY_EPSILON;
 }
 
 const MAX_ITEMS = 3;
 /** 原因的可见窗口：与心境 6h 半衰期对齐。超过它一律不渲染（不把旧因写成「刚刚」）。 */
 const CAUSE_TTL_MS = 6 * 60 * 60 * 1000;
 
-const GROUP_LABEL: Record<StateGroup, string> = { mood: "心境", relation: "对用户" };
+const GROUP_LABEL: Record<StateGroup, string> = { mood: '心境', relation: '对用户' };
 
 interface IntensityText {
-    strong: string;
-    mild: string;
+  strong: string;
+  mild: string;
 }
 
 const DIMENSION_TEXT: Record<StateDimension, { up: IntensityText; down: IntensityText }> = {
-    valence: {
-        up: { strong: "比平常轻快", mild: "比平常略轻快" },
-        down: { strong: "比平常低落", mild: "比平常略低落" },
-    },
-    arousal: {
-        up: { strong: "比平常更有精神", mild: "比平常略提起劲" },
-        down: { strong: "比平常更倦怠", mild: "比平常略疲软" },
-    },
-    trust: {
-        up: { strong: "信任明显高于平常", mild: "信任略高于平常" },
-        down: { strong: "信任明显低于平常", mild: "信任略低于平常" },
-    },
-    closeness: {
-        up: { strong: "亲近感明显高于平常", mild: "亲近感略高于平常" },
-        down: { strong: "比平常疏远", mild: "比平常略疏远" },
-    },
-    familiarity: {
-        up: { strong: "比平常更熟悉", mild: "比平常略熟悉" },
-        down: { strong: "比平常更生疏", mild: "比平常略生疏" },
-    },
+  valence: {
+    up: { strong: '比平常轻快', mild: '比平常略轻快' },
+    down: { strong: '比平常低落', mild: '比平常略低落' },
+  },
+  arousal: {
+    up: { strong: '比平常更有精神', mild: '比平常略提起劲' },
+    down: { strong: '比平常更倦怠', mild: '比平常略疲软' },
+  },
+  trust: {
+    up: { strong: '信任明显高于平常', mild: '信任略高于平常' },
+    down: { strong: '信任明显低于平常', mild: '信任略低于平常' },
+  },
+  closeness: {
+    up: { strong: '亲近感明显高于平常', mild: '亲近感略高于平常' },
+    down: { strong: '比平常疏远', mild: '比平常略疏远' },
+  },
+  familiarity: {
+    up: { strong: '比平常更熟悉', mild: '比平常略熟悉' },
+    down: { strong: '比平常更生疏', mild: '比平常略生疏' },
+  },
 };
 
 const TENDENCY_TEXT: Record<StateDimension, { up: string; down: string }> = {
-    valence: { up: "语气更放松", down: "语气更简短" },
-    arousal: { up: "更愿意主动搭话", down: "更愿保持安静" },
-    trust: { up: "更愿意分享", down: "有所保留" },
-    closeness: { up: "更愿意靠近对方", down: "保持距离" },
-    familiarity: { up: "更随意自然", down: "更客气拘谨" },
+  valence: { up: '语气更放松', down: '语气更简短' },
+  arousal: { up: '更愿意主动搭话', down: '更愿保持安静' },
+  trust: { up: '更愿意分享', down: '有所保留' },
+  closeness: { up: '更愿意靠近对方', down: '保持距离' },
+  familiarity: { up: '更随意自然', down: '更客气拘谨' },
 };
 
-const HEADER = "【内部状态（相对你自己基线的偏移；用它调整语气，不要向用户提及本段）】";
+const HEADER = '【内部状态（相对你自己基线的偏移；用它调整语气，不要向用户提及本段）】';
 
 /** 状态机已知原因 → 其**真正作用**的字段与方向。 */
 export interface StateCause {
-    text: string;
-    field: StateDimension;
-    sign: 1 | -1;
+  text: string;
+  field: StateDimension;
+  sign: 1 | -1;
 }
 
 /**
@@ -234,11 +234,11 @@ export interface StateCause {
  * 非本表的通用原因（例如操作者调整）按其维度组是否仍显著偏移判断，不限定方向。
  * 规则与渲染共用同一原因定义，不按重复的文案推测方向。
  */
-export const STATE_CAUSES: Record<"action" | "failure", StateCause> = {
-    action: { text: "完成了一次行动。", field: "valence", sign: 1 },
-    failure: { text: "有一次操作没有成功。", field: "valence", sign: -1 },
+export const STATE_CAUSES: Record<'action' | 'failure', StateCause> = {
+  action: { text: '完成了一次行动。', field: 'valence', sign: 1 },
+  failure: { text: '有一次操作没有成功。', field: 'valence', sign: -1 },
 };
-const MACHINE_CAUSES = new Map(Object.values(STATE_CAUSES).map(cause => [cause.text, cause]));
+const MACHINE_CAUSES = new Map(Object.values(STATE_CAUSES).map((cause) => [cause.text, cause]));
 
 /**
  * 把状态对象渲染为一段情境化文本（无数值）。
@@ -254,79 +254,77 @@ const MACHINE_CAUSES = new Map(Object.values(STATE_CAUSES).map(cause => [cause.t
  *   - 「每组只取最新」保证不会把与当前偏移方向相反的历史原因挂在现状上。
  */
 export function renderState(state: LepiState, nowMs: number = Date.now()): string {
-    const atMs = Number.isFinite(nowMs) ? nowMs : Date.now();
-    const current: Record<StateDimension, number> = {
-        valence: state.mood.valence,
-        arousal: state.mood.arousal,
-        trust: state.relation.trust,
-        closeness: state.relation.closeness,
-        familiarity: state.relation.familiarity,
-    };
+  const atMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const current: Record<StateDimension, number> = {
+    valence: state.mood.valence,
+    arousal: state.mood.arousal,
+    trust: state.relation.trust,
+    closeness: state.relation.closeness,
+    familiarity: state.relation.familiarity,
+  };
 
-    const deviations: Array<{ dim: StateDimension; delta: number; group: StateGroup }> = [];
-    for (const [dim, value] of Object.entries(current) as Array<[StateDimension, number]>) {
-        const delta = value - BASELINE[dim];
-        if (Math.abs(delta) >= MILD) {
-            const group: StateGroup = dim === "valence" || dim === "arousal" ? "mood" : "relation";
-            deviations.push({ dim, delta, group });
-        }
+  const deviations: Array<{ dim: StateDimension; delta: number; group: StateGroup }> = [];
+  for (const [dim, value] of Object.entries(current) as Array<[StateDimension, number]>) {
+    const delta = value - BASELINE[dim];
+    if (Math.abs(delta) >= MILD) {
+      const group: StateGroup = dim === 'valence' || dim === 'arousal' ? 'mood' : 'relation';
+      deviations.push({ dim, delta, group });
     }
-    deviations.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-    const selected = deviations.slice(0, MAX_ITEMS);
+  }
+  deviations.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const selected = deviations.slice(0, MAX_ITEMS);
 
-    const itemsByGroup: Record<StateGroup, string[]> = { mood: [], relation: [] };
-    for (const dev of selected) {
-        const intensity: keyof IntensityText = Math.abs(dev.delta) >= STRONG ? "strong" : "mild";
-        const direction: "up" | "down" = dev.delta > 0 ? "up" : "down";
-        itemsByGroup[dev.group].push(DIMENSION_TEXT[dev.dim][direction][intensity]);
+  const itemsByGroup: Record<StateGroup, string[]> = { mood: [], relation: [] };
+  for (const dev of selected) {
+    const intensity: keyof IntensityText = Math.abs(dev.delta) >= STRONG ? 'strong' : 'mild';
+    const direction: 'up' | 'down' = dev.delta > 0 ? 'up' : 'down';
+    itemsByGroup[dev.group].push(DIMENSION_TEXT[dev.dim][direction][intensity]);
+  }
+
+  // 当前仍显著偏移的维度组（含未进入 top-3 的组）；及按字段的偏移量。
+  const deviatingGroups = new Set(deviations.map((dev) => dev.group));
+  const devByField = new Map(deviations.map((dev) => [dev.dim, dev.delta] as const));
+
+  const latestByGroup: Record<StateGroup, StateReason | null> = { mood: null, relation: null };
+  for (const reason of state.reasons) {
+    const at = Date.parse(reason.at);
+    if (!Number.isFinite(at) || at > atMs + 1000) continue; // 未来/不可解析：忽略
+    if (atMs - at > CAUSE_TTL_MS) continue; // 超过 6h：不渲染
+    const known = MACHINE_CAUSES.get(reason.text);
+    let relevant: boolean;
+    if (known) {
+      const delta = devByField.get(known.field);
+      relevant =
+        typeof delta === 'number' && Math.abs(delta) >= MILD && Math.sign(delta) === known.sign;
+    } else {
+      // 通用/操作者原因：其维度组仍有显著偏移即可展示（不限定方向）。
+      relevant = deviatingGroups.has(reason.dimension);
     }
+    if (!relevant) continue;
+    const prev = latestByGroup[reason.dimension];
+    if (!prev || Date.parse(prev.at) < at) latestByGroup[reason.dimension] = reason;
+  }
 
-    // 当前仍显著偏移的维度组（含未进入 top-3 的组）；及按字段的偏移量。
-    const deviatingGroups = new Set(deviations.map((dev) => dev.group));
-    const devByField = new Map(deviations.map((dev) => [dev.dim, dev.delta] as const));
+  const reasonsByGroup: Record<StateGroup, string[]> = { mood: [], relation: [] };
+  for (const group of ['mood', 'relation'] as StateGroup[]) {
+    const reason = latestByGroup[group];
+    if (reason && deviatingGroups.has(group)) reasonsByGroup[group].push(reason.text);
+  }
 
-    const latestByGroup: Record<StateGroup, StateReason | null> = { mood: null, relation: null };
-    for (const reason of state.reasons) {
-        const at = Date.parse(reason.at);
-        if (!Number.isFinite(at) || at > atMs + 1000) continue; // 未来/不可解析：忽略
-        if (atMs - at > CAUSE_TTL_MS) continue; // 超过 6h：不渲染
-        const known = MACHINE_CAUSES.get(reason.text);
-        let relevant: boolean;
-        if (known) {
-            const delta = devByField.get(known.field);
-            relevant =
-                typeof delta === "number" &&
-                Math.abs(delta) >= MILD &&
-                Math.sign(delta) === known.sign;
-        } else {
-            // 通用/操作者原因：其维度组仍有显著偏移即可展示（不限定方向）。
-            relevant = deviatingGroups.has(reason.dimension);
-        }
-        if (!relevant) continue;
-        const prev = latestByGroup[reason.dimension];
-        if (!prev || Date.parse(prev.at) < at) latestByGroup[reason.dimension] = reason;
-    }
+  const lines = [HEADER];
+  for (const group of ['mood', 'relation'] as StateGroup[]) {
+    const items = itemsByGroup[group];
+    const reasons = reasonsByGroup[group];
+    if (items.length === 0 && reasons.length === 0) continue;
+    lines.push(`- ${GROUP_LABEL[group]}: ${items.length > 0 ? items.join('；') : '接近平常'}`);
+    if (reasons.length > 0) lines.push(`  原因: ${reasons.join('；')}`);
+  }
+  if (lines.length === 1) lines.push('- 与基线相比无明显偏移。');
 
-    const reasonsByGroup: Record<StateGroup, string[]> = { mood: [], relation: [] };
-    for (const group of ["mood", "relation"] as StateGroup[]) {
-        const reason = latestByGroup[group];
-        if (reason && deviatingGroups.has(group)) reasonsByGroup[group].push(reason.text);
-    }
+  const tendencies = [
+    ...new Set(selected.map((dev) => TENDENCY_TEXT[dev.dim][dev.delta > 0 ? 'up' : 'down'])),
+  ];
+  if (tendencies.length > 0) lines.push(`- 行为倾向: ${tendencies.join('；')}`);
 
-    const lines = [HEADER];
-    for (const group of ["mood", "relation"] as StateGroup[]) {
-        const items = itemsByGroup[group];
-        const reasons = reasonsByGroup[group];
-        if (items.length === 0 && reasons.length === 0) continue;
-        lines.push(`- ${GROUP_LABEL[group]}: ${items.length > 0 ? items.join("；") : "接近平常"}`);
-        if (reasons.length > 0) lines.push(`  原因: ${reasons.join("；")}`);
-    }
-    if (lines.length === 1) lines.push("- 与基线相比无明显偏移。");
-
-    const tendencies = [
-        ...new Set(selected.map((dev) => TENDENCY_TEXT[dev.dim][dev.delta > 0 ? "up" : "down"])),
-    ];
-    if (tendencies.length > 0) lines.push(`- 行为倾向: ${tendencies.join("；")}`);
-
-    return lines.join("\n");
+  return lines.join('\n');
 }
