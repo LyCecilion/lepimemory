@@ -95,10 +95,17 @@ export default [
     },
   },
   {
-    files: [`${PLUGIN}/src/client/**/*.ts`, `${PLUGIN}/src/client/**/*.tsx`],
+    files: [
+      `${PLUGIN}/src/client/**/*.js`,
+      `${PLUGIN}/src/client/**/*.ts`,
+      `${PLUGIN}/src/client/**/*.tsx`,
+    ],
     languageOptions: {
       globals: { ...globals.browser },
     },
+  },
+  {
+    files: [`${PLUGIN}/src/client/**/*.ts`, `${PLUGIN}/src/client/**/*.tsx`],
     plugins: { 'react-hooks': reactHooks },
     rules: {
       'react-hooks/rules-of-hooks': 'error',

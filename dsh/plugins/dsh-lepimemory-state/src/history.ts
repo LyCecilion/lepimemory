@@ -638,7 +638,7 @@ export function createHistoryCoordinator({ ctx, store, processor, evidence }: {
         });
         return true;
     }
-    function sweep(_requestId: string): Promise<boolean> {
+    function sweep(_requestId?: string): Promise<boolean> {
         // A single owner prevents overlapping cold resumes and management tickets.
         const key = '*';
         const running = sweeping.get(key);

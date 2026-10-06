@@ -634,7 +634,7 @@ async function schedulerFixture(t, sensitivity = 'ordinary') {
     f.processor.extract = async () => ({ candidates: [candidate], unresolved_source_ids: [] });
     const admission = { async evaluate() { return { verdict: 'accept', reason_code: 'value_accept', backend: 'generative', score: null, truncated: false }; } };
     const memory = createMemoryRuntime({ ctx: f.ctx, config: resolveConfig({}), store: f.store, processor: f.processor,
-        admission, evidence: f.evidence, history: {}, hindsight: new HindsightClient({ baseUrl: 'http://127.0.0.1:1', deadlineMs: 30 }),
+        admission, evidence: f.evidence, hindsight: new HindsightClient({ baseUrl: 'http://127.0.0.1:1', deadlineMs: 30 }),
         askPrivate: (...args) => f.control.askPrivate(...args) });
     f.ownMemory(memory);
     return { ...f, ...input, candidate, admission, memory };

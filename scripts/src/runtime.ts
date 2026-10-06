@@ -32,6 +32,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import {
@@ -42,6 +43,7 @@ import {
     redactConfig,
     ConfigError,
 } from "../../dsh/plugins/dsh-lepimemory-state/lib/config.js";
+import type { LepiConfig, LlmRoute } from "../../dsh/plugins/dsh-lepimemory-state/lib/config.js";
 import {
     NODE_VERSION,
     DSH_VERSION,
@@ -83,9 +85,27 @@ const PROFILE_PATCH_SRC = path.join(PROFILE_SRC, "cordis.patch.yml");
 const HEALTH_TIMEOUT_MS = 90000;
 const HEALTH_INTERVAL_MS = 500;
 
+/** Minimal manifest surface this launcher reads. */
+interface Manifest {
+    version?: string;
+    peerDependencies?: Record<string, string>;
+    dependencies?: Record<string, string>;
+}
+/** Generated runtime profile paths (one profile name). */
+interface ProfilePaths {
+    dir: string;
+    patch: string;
+    pkg: string;
+    nodeModules: string;
+    symlink: string;
+    marker: string;
+}
+
 // ── errors / logging ─────────────────────────────────────────────────
 class LaunchError extends Error {
-    constructor(code, detail = null) {
+    readonly code: string;
+    readonly detail: string | null;
+    constructor(code: string, detail: string | null = null) {
         super(detail ? `${code}: ${detail}` : code);
         this.name = "LaunchError";
         this.code = code;
@@ -94,31 +114,31 @@ class LaunchError extends Error {
 }
 
 /** Diagnostics only — never prints a credential value. */
-function info(message) {
+function info(message: string): void {
     process.stderr.write(`lepimemory-runtime: ${message}\n`);
 }
-function warn(message) {
+function warn(message: string): void {
     process.stderr.write(`lepimemory-runtime: warning: ${message}\n`);
 }
 
 // ── small fs helpers ─────────────────────────────────────────────────
-function readJson(file) {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+function readJson<T = Record<string, unknown>>(file: string): T {
+    return JSON.parse(fs.readFileSync(file, "utf8")) as T;
 }
 
-function writeFileAtomic(file, content) {
+function writeFileAtomic(file: string, content: string): void {
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
     fs.writeFileSync(tmp, content);
     fs.renameSync(tmp, file);
 }
 
-function yamlStr(value) {
+function yamlStr(value: unknown): string {
     // JSON double-quoted scalars are valid YAML and keep non-ASCII literal.
     return JSON.stringify(String(value));
 }
 
 // ── exact Node binding ───────────────────────────────────────────────
-function assertPinnedNode() {
+function assertPinnedNode(): void {
     if (process.version !== NODE_VERSION) {
         throw new LaunchError(
             "LEPI_NODE_VERSION_MISMATCH",
@@ -136,15 +156,15 @@ function assertPinnedNode() {
 }
 
 // ── installation anchors / core plugin versions ──────────────────────
-function assertInstallation() {
+function assertInstallation(): void {
     if (!fs.existsSync(CLI_ANCHOR) || !fs.existsSync(CLI_BIN)) {
         throw new LaunchError("LEPI_CLI_MISSING", "repository dsh install absent; run 'make install-profile'");
     }
-    const cliVersion = readJson(CLI_ANCHOR).version;
+    const cliVersion = readJson<Manifest>(CLI_ANCHOR).version;
     if (cliVersion !== DSH_VERSION) {
         throw new LaunchError("LEPI_CLI_VERSION_MISMATCH", `locked CLI is ${cliVersion}, expected ${DSH_VERSION}`);
     }
-    const pluginPkg = readJson(path.join(PLUGIN_DIR, "package.json"));
+    const pluginPkg = readJson<Manifest>(path.join(PLUGIN_DIR, "package.json"));
     const peer = pluginPkg.peerDependencies?.["@deepseek-ai/dsh"];
     if (peer !== DSH_VERSION) {
         throw new LaunchError(
@@ -160,7 +180,7 @@ function assertInstallation() {
                 `plugin dependency ${name} is ${dep ?? "unset"}, expected ${DSH_VERSION}`,
             );
         }
-        const installed = createRequire(path.join(PLUGIN_DIR, "package.json"))(`${name}/package.json`).version;
+        const installed = (createRequire(path.join(PLUGIN_DIR, "package.json"))(`${name}/package.json`) as Manifest).version;
         if (installed !== DSH_VERSION) {
             throw new LaunchError("LEPI_CORE_VERSION_MISMATCH", `installed ${name} is not ${DSH_VERSION}`);
         }
@@ -168,17 +188,19 @@ function assertInstallation() {
 }
 
 /** `dev` requires the new entrypoint, not just independently built modules. */
-async function assertCoreReady() {
+async function assertCoreReady(): Promise<void> {
     const missing = CORE_MODULES.filter((m) => !fs.existsSync(path.join(PLUGIN_DIR, "lib", m)));
     if (missing.length > 0) throw new LaunchError("LEPI_CORE_NOT_READY", "new runtime cutover has not completed");
-    const entry = await import(pathToFileURL(path.join(PLUGIN_DIR, "lib", "index.js")).href);
+    // Static import cannot work here: the target is a generated artifact whose path is built at runtime,
+    // and `dev` must fail closed when the lib/ cutover is absent — so it is only loaded once the gate passes.
+    const entry = await import(pathToFileURL(path.join(PLUGIN_DIR, "lib", "index.js")).href) as { RUNTIME_CONTRACT?: unknown };
     if (entry.RUNTIME_CONTRACT !== 1) {
         throw new LaunchError("LEPI_CORE_NOT_READY", "entrypoint does not implement the approved runtime contract");
     }
 }
 
 // ── config resolution ────────────────────────────────────────────────
-function loadResolvedConfig() {
+function loadResolvedConfig(): LepiConfig {
     const load = loadEnvFile({ env: process.env, migrate: true });
     if (load.migrated) {
         info(`migrated legacy .env; backup written to ${load.backupPath}`);
@@ -186,7 +208,7 @@ function loadResolvedConfig() {
     for (const field of load.missingFields) {
         info(`missing ${field}: add it to ${load.file}; no endpoint is guessed`);
     }
-    let cfg;
+    let cfg: LepiConfig;
     try {
         cfg = resolveConfig(process.env);
     } catch (error) {
@@ -199,7 +221,7 @@ function loadResolvedConfig() {
 }
 
 // ── profile generation ───────────────────────────────────────────────
-function profilePaths(dshHome) {
+function profilePaths(dshHome: string): ProfilePaths {
     const dir = path.join(dshHome, "profiles", PROFILE_NAME);
     return {
         dir,
@@ -211,10 +233,10 @@ function profilePaths(dshHome) {
     };
 }
 
-function isGeneratedProfile(paths) {
+function isGeneratedProfile(paths: ProfilePaths): boolean {
     if (!fs.existsSync(paths.marker)) return false;
     try {
-        return readJson(paths.marker).creator === MARKER_CREATOR;
+        return readJson<{ creator?: unknown }>(paths.marker).creator === MARKER_CREATOR;
     } catch {
         return false;
     }
@@ -224,7 +246,7 @@ function isGeneratedProfile(paths) {
  * Refuse to touch a profile we did not generate, and never touch sibling
  * profiles. Returns "absent", "empty", or "ours".
  */
-function inspectProfileOwnership(paths) {
+function inspectProfileOwnership(paths: ProfilePaths): "absent" | "empty" | "ours" {
     if (!fs.existsSync(paths.dir)) return "absent";
     if (isGeneratedProfile(paths)) return "ours";
     const entries = fs.readdirSync(paths.dir);
@@ -240,13 +262,15 @@ function inspectProfileOwnership(paths) {
  * config (not as a rooted entry-list row), so it cannot be patched by id; the
  * source patch text is transformed as we copy it. Fails loud if the shape moves.
  */
-function forceToolWebFetchFalse(text) {
+function forceToolWebFetchFalse(text: string): string {
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i += 1) {
-        if (!/^\s*-\s*id:\s*tool-web\s*$/.test(lines[i])) continue;
+        const line = lines[i] ?? "";
+        if (!/^\s*-\s*id:\s*tool-web\s*$/.test(line)) continue;
         for (let j = i + 1; j < Math.min(i + 8, lines.length); j += 1) {
-            if (/^\s*-\s*id:/.test(lines[j])) break;
-            const m = lines[j].match(/^(\s*)fetch:\s*(?:true|false)\s*$/);
+            const candidate = lines[j] ?? "";
+            if (/^\s*-\s*id:/.test(candidate)) break;
+            const m = candidate.match(/^(\s*)fetch:\s*(?:true|false)\s*$/);
             if (m) {
                 lines[j] = `${m[1]}fetch: false`;
                 return lines.join("\n");
@@ -257,7 +281,7 @@ function forceToolWebFetchFalse(text) {
     throw new LaunchError("LEPI_PROFILE_SHAPE", "tool-web row not found in the source profile patch");
 }
 
-function providerEntry(routeKey, displayName, route) {
+function providerEntry(routeKey: string, displayName: string, route: LlmRoute): string {
     // The verified DeepSeek baseline otherwise spends the whole bounded output on thinking.
     // Use native pi-ai compatibility metadata only on the fixed processing routes; leave role/UI models alone.
     const boundedDeepSeek = routeKey !== 'lepimemory-role' && route.model === 'deepseek-flash';
@@ -292,14 +316,15 @@ function providerEntry(routeKey, displayName, route) {
  * empty provider dict: that both refuses a custom route and neutralises the
  * draft profile's stale official-URL fallback, so no stock model escapes.
  */
-function generateOverlayEntries(cfg) {
-    const blocks = [];
+function generateOverlayEntries(cfg: LepiConfig): string {
+    const blocks: string[] = [];
     if (cfg.configured) {
-        const providers = [
+        const routeEntries: Array<[string, string, LlmRoute]> = [
             ["lepimemory-role", "Lepimemory 角色", cfg.llm.role],
             ["lepimemory-process", "Lepimemory 处理", cfg.llm.process],
             ["lepimemory-control-fallback", "Lepimemory 备用控制", cfg.llm.controlFallback],
-        ].filter(([, , route]) => route.configured)
+        ];
+        const providers = routeEntries.filter(([, , route]) => route.configured)
             .map(([id, name, route]) => providerEntry(id, name, route)).join("\n");
         blocks.push(
             [
@@ -357,7 +382,7 @@ function generateOverlayEntries(cfg) {
     return blocks.join("\n");
 }
 
-function generateProfilePatch(cfg) {
+function generateProfilePatch(cfg: LepiConfig): string {
     if (!fs.existsSync(PROFILE_PATCH_SRC)) {
         throw new LaunchError("LEPI_PROFILE_SOURCE_MISSING", `${PROFILE_PATCH_SRC} not found`);
     }
@@ -371,7 +396,7 @@ function generateProfilePatch(cfg) {
     return `${preserved.replace(/\s*$/, "")}\n\n${header}\n${generateOverlayEntries(cfg)}\n`;
 }
 
-function generateProfilePackage() {
+function generateProfilePackage(): string {
     const pkg = {
         name: "dsh-profile-lepimemory",
         private: true,
@@ -392,7 +417,7 @@ function generateProfilePackage() {
 }
 
 /** Copy the profile and (re)generate ours. Idempotent once the marker exists. */
-function ensureProfile(cfg) {
+function ensureProfile(cfg: LepiConfig): ProfilePaths {
     const paths = profilePaths(cfg.home.dshHome);
     const ownership = inspectProfileOwnership(paths);
     fs.mkdirSync(paths.dir, { recursive: true });
@@ -437,7 +462,7 @@ function ensureProfile(cfg) {
 }
 
 // ── external services (non-fatal) ────────────────────────────────────
-function dockerEnv(cfg) {
+function dockerEnv(cfg: LepiConfig): Record<string, string> {
     const route = cfg.llm.hindsight;
     return {
         HINDSIGHT_API_LLM_PROVIDER: route.configured ? "openai" : "none",
@@ -453,8 +478,8 @@ function dockerEnv(cfg) {
 }
 
 /** Derived env injected into the child: names + values in memory only, never files. */
-function runtimeEnv(cfg) {
-    const env = {};
+function runtimeEnv(cfg: LepiConfig): Record<string, string> {
+    const env: Record<string, string> = {};
     applyDerivedEnv(env, cfg); // LEPI_*_API_KEY
     env.LEPI_HINDSIGHT_URL = cfg.services.hindsight.url;
     env.LEPI_LAYA_URL = cfg.services.laya.url;
@@ -465,7 +490,7 @@ function runtimeEnv(cfg) {
     return env;
 }
 
-function startExternalServices(cfg) {
+function startExternalServices(cfg: LepiConfig): void {
     const probe = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
     if (probe.status !== 0) {
         warn("docker compose unavailable; memory services were not started (external dependency)");
@@ -483,11 +508,11 @@ function startExternalServices(cfg) {
 }
 
 // ── fixed CLI launch + core health ───────────────────────────────────
-function launchCli(cfg) {
+function launchCli(cfg: LepiConfig): ChildProcess {
     if (!fs.existsSync(CLI_BIN)) {
         throw new LaunchError("LEPI_CLI_MISSING", "repository dsh install absent; run 'make install-profile'");
     }
-    const childEnv = { ...process.env, ...runtimeEnv(cfg) };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, ...runtimeEnv(cfg) };
     childEnv.DSH_HOME = cfg.home.dshHome;
     childEnv.PORT = String(cfg.home.port);
     const args = [
@@ -503,7 +528,7 @@ function launchCli(cfg) {
     return spawn(process.execPath, args, { cwd: REPO_ROOT, stdio: "inherit", env: childEnv });
 }
 
-async function waitForCoreHealth(port, child) {
+async function waitForCoreHealth(port: number, child: ChildProcess): Promise<void> {
     const url = `http://127.0.0.1:${port}/lepimemory/health`;
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -513,19 +538,19 @@ async function waitForCoreHealth(port, child) {
         try {
             const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
             if (res.ok) {
-                const body = await res.json().catch(() => null);
-                if (body && body.core === true) return body;
+                const body = await res.json().catch(() => null) as { core?: unknown } | null;
+                if (body && body.core === true) return;
             }
         } catch {
             /* not up yet */
         }
-        await new Promise((resolve) => setTimeout(resolve, HEALTH_INTERVAL_MS));
+        await new Promise<void>((resolve) => { setTimeout(resolve, HEALTH_INTERVAL_MS); });
     }
     throw new LaunchError("LEPI_CORE_NOT_READY", `core health did not become ready at ${url}`);
 }
 
 // ── commands ─────────────────────────────────────────────────────────
-function commandInstall() {
+function commandInstall(): void {
     assertPinnedNode();
     const cfg = loadResolvedConfig();
     assertInstallation();
@@ -536,7 +561,7 @@ function commandInstall() {
     info(`install complete (home ${cfg.home.dshHome}, bank ${cfg.bank})`);
 }
 
-async function commandDev() {
+async function commandDev(): Promise<void> {
     assertPinnedNode();
     const cfg = loadResolvedConfig();
     assertInstallation();
@@ -544,7 +569,7 @@ async function commandDev() {
     ensureProfile(cfg);
     startExternalServices(cfg);
     const child = launchCli(cfg);
-    const forward = (signal) => () => child.kill(signal);
+    const forward = (signal: NodeJS.Signals) => () => child.kill(signal);
     process.on("SIGINT", forward("SIGINT"));
     process.on("SIGTERM", forward("SIGTERM"));
     try {
@@ -557,7 +582,7 @@ async function commandDev() {
     child.on("exit", (code) => process.exit(code ?? 0));
 }
 
-function runEntry(file, flags = []) {
+function runEntry(file: string, flags: string[] = []): void {
     if (!fs.existsSync(file)) {
         throw new LaunchError("LEPI_VERIFY_MISSING", `${file} not present (added at the Step-11 cutover)`);
     }
@@ -567,7 +592,7 @@ function runEntry(file, flags = []) {
     }
 }
 
-function commandVerify() {
+function commandVerify(): void {
     assertPinnedNode();
     runEntry(path.join(REPO_ROOT, "scripts", "dist", "verify-runtime.js"));
     runEntry(path.join(PLUGIN_DIR, "test", "runtime.test.js"), ["--test",
@@ -577,11 +602,11 @@ function commandVerify() {
     info("verify passed");
 }
 
-function usage() {
+function usage(): void {
     process.stderr.write("usage: runtime.mjs <install|dev|verify>\n");
 }
 
-async function main(argv) {
+async function main(argv: string[]): Promise<void> {
     const command = argv[0];
     switch (command) {
         case "install":
@@ -599,7 +624,7 @@ async function main(argv) {
     }
 }
 
-async function run() {
+async function run(): Promise<void> {
     try {
         await main(process.argv.slice(2));
     } catch (error) {
@@ -611,7 +636,7 @@ async function run() {
             process.stderr.write(`lepimemory-runtime: ${error.code}${error.field ? ` [${error.field}]` : ""}\n`);
             process.exit(1);
         }
-        process.stderr.write(`lepimemory-runtime: unexpected error: ${error?.stack ?? error}\n`);
+        process.stderr.write(`lepimemory-runtime: unexpected error: ${(error as Error)?.stack ?? String(error)}\n`);
         process.exit(1);
     }
 }
