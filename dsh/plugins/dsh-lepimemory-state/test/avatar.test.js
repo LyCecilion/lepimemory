@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { AVATAR_ASSETS } from '../lib/avatar-assets.js';
+import { initialState, toneOf, nearOf } from '../lib/state.js';
+
+const AVATAR_DIR = fileURLToPath(new URL('../assets/avatar/', import.meta.url));
+const KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * 客户端 `client.js` 里 `AVATAR_FRAMES` 出现的全部 key（去重排序）。
+ * mirror of client.js AVATAR_FRAMES — 两边同时改；它只用于保证前端引用的键都能在素材清单里找到。
+ */
+const CLIENT_FRAME_KEYS = [
+    'angry', 'bell', 'blink', 'bubble', 'button', 'celebrate', 'cheese', 'cheer', 'cheers', 'clueless',
+    'clown', 'cry', 'cry2', 'crowbar', 'daze', 'dead', 'dizzy', 'expect', 'glowstick', 'greet', 'heart',
+    'idea', 'idle-pngtuber', 'jailed', 'jailed1', 'knock', 'laugh', 'lick', 'loading', 'magic', 'megaphone',
+    'nervous', 'nod', 'nosetouch', 'press', 'question', 'record', 'rose', 'shades', 'shocked', 'shy',
+    'sleep', 'stop', 'sweat', 'think', 'trash', 'type', 'type-angry', 'type-annoyed', 'work', 'work-angry',
+    'work-tired',
+];
+
+test('清单是 62 项且键名形状合法', () => {
+    const keys = Object.keys(AVATAR_ASSETS);
+    assert.equal(keys.length, 62);
+    for (const key of keys) assert.match(key, KEY_RE, `非法 key：${key}`);
+    assert.equal(new Set(keys).size, keys.length, '存在重复 key');
+});
+
+test('assets/avatar/ 的文件集合与清单的值完全相等（无缺失、无多余）', () => {
+    const onDisk = fs.readdirSync(AVATAR_DIR).sort();
+    const declared = [...Object.values(AVATAR_ASSETS)].sort();
+    assert.deepEqual(onDisk, declared);
+});
+
+test('每个素材都是 256x256 的 GIF89a', () => {
+    for (const [key, file] of Object.entries(AVATAR_ASSETS)) {
+        const buf = fs.readFileSync(path.join(AVATAR_DIR, file));
+        assert.equal(buf.subarray(0, 6).toString('latin1'), 'GIF89a', `${key} 头部不是 GIF89a`);
+        assert.equal(buf.readUInt16LE(6), 256, `${key} 宽度不是 256`);
+        assert.equal(buf.readUInt16LE(8), 256, `${key} 高度不是 256`);
+    }
+});
+
+test('客户端 AVATAR_FRAMES 引用的每个 key 都在素材清单里', () => {
+    for (const key of CLIENT_FRAME_KEYS) assert.ok(key in AVATAR_ASSETS, `客户端引用了未知 key：${key}`);
+});
+
+test('toneOf 在 MILD 边界分档，nearOf 以 closeness 高出基线一档为准', () => {
+    const at = (delta) => {
+        const state = initialState();
+        state.mood.valence = delta;
+        return toneOf(state);
+    };
+    assert.equal(at(0.10), 'bright');
+    assert.equal(at(0.05), 'plain');
+    assert.equal(at(-0.10), 'low');
+
+    const near = (closeness) => {
+        const state = initialState();
+        state.relation.closeness = closeness;
+        return nearOf(state);
+    };
+    assert.equal(near(0.30), true);
+    assert.equal(near(0.25), false);
+});

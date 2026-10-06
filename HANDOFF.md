@@ -83,7 +83,7 @@ retain 五档、observation refine-not-overwrite、`invalidate↔revert`、`min_
   - **① 行动工具 `write_note`**（`lib/action.js`）：真实落盘 `<DSH_HOME>/lepimemory/notes/`，经 `ctx.approval` 确认；成功进 experience 写路径（`origin:character-action`）与状态机，失败（抛错→`isError`）进状态。证据 `docs/research/artifacts/action-tool.md`。
   - **② 规则集定稿三条 + 量级标定**（`lib/machine.js`）：`familiarity +0.03`、`action.success.brighten`（valence +0.12）、`tool.failure.dampen`（valence −0.12）——单次行动成功/失败**跨渲染阈值（一轮可见）**，熟悉度 3–4 轮累积可见。证据 `state-machine.md`。
   - **③ 遗忘子集选择**：`forget` 两段式（缺省 `ids` → 只返回候选计划；带 `ids` → 审批后**只抑制选中项**）。证据 `memory-forget.md`。
-  - **④ 状态面板**（`lib/panel.js` + `client.js` + `package.json`）：`conversation.input.dock` 上实时显示状态（自定义路由 `/lepimemory/state` + 本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）；另有 **`/lepimemory/history` 历史账本分页**（审计/召回/写入/遗忘/行动，最新在前、可翻页）。证据 `state-panel.md`。
+  - **④ 状态面板**（`lib/panel.js` + `client.js` + `package.json`）：右侧栏**标签页**（`sidebar.right.pane.tab`，session 作用域；入口是右侧栏 Start 页的「状态面板」卡片）实时显示状态（自定义路由 `/lepimemory/state` + 本机信任栅栏；无 `webServer` / `panel.enabled=false` 时降级为「状态不可用」）；角色**立绘** overlay 仍在 `conversation.input.dock`。另有 **`/lepimemory/history` 历史账本分页**（审计/召回/写入/遗忘/行动，最新在前、可翻页）；默认 `grouped=1` 按「主体」分组、**以组为单位分页**（一条记忆/任务只有一行，带 `×N` 阶段链），`debug` 走逐条审计。证据 `state-panel.md`。
   - 另：模型端点已切到 **geek-tech-club**（仅**本机常驻 profile**；仓库草稿保持「不默认启用」——避免个人端点入库，也避免全新 clone 未设 `LEPI_LLM_BASE_URL` 时把 GEEK key 发到官方端点）。
 - ✅ **Phase 4：补齐 Lv1/Lv2 剩余缺口（2026-10-03，`develop`）**：
   - **上下文管理（Lv1）**：启用 dsh `compaction-basic` + `tool-result-pruner` + `command-compact`（必须落在 preset 的 `isolate` realm；旧稿「compaction 暂禁」的顾虑被调研推翻）。证据 `docs/research/artifacts/context-management.md`。

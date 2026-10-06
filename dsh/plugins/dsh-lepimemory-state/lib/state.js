@@ -128,6 +128,21 @@ export function validateState(value) {
 // ── 渲染（不出现数值；只渲染偏离最大的至多 3 项 + 原因 + 行为倾向）────────
 const MILD = 0.1; // |Δ| ≥ 0.10 → 「略」
 const STRONG = 0.25; // |Δ| ≥ 0.25 → 「明显」
+/** 边界容差：0.30 - 0.20 === 0.09999999999999998，语义上仍是一档；阈值不变，只吸收浮点噪声。 */
+const BOUNDARY_EPSILON = 1e-9;
+
+/** 心境基调（供 Lv3 立绘与面板状态条共用）：按 valence 相对基线的偏移分三档。 */
+export function toneOf(state) {
+    const dv = state.mood.valence - BASELINE.valence;
+    if (dv >= MILD - BOUNDARY_EPSILON) return "bright";
+    if (dv <= -MILD + BOUNDARY_EPSILON) return "low";
+    return "plain";
+}
+/** 关系亲近基调：closeness 高出基线至少一档。 */
+export function nearOf(state) {
+    return state.relation.closeness - BASELINE.closeness >= MILD - BOUNDARY_EPSILON;
+}
+
 const MAX_ITEMS = 3;
 /** 原因的可见窗口：与心境 6h 半衰期对齐。超过它一律不渲染（不把旧因写成「刚刚」）。 */
 const CAUSE_TTL_MS = 6 * 60 * 60 * 1000;

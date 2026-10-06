@@ -12,14 +12,19 @@
  * 路由：
  *   - `GET  /lepimemory/health`                          公开只读 bool（launcher readiness）
  *   - `GET  /lepimemory/state`                           操作者；有效状态（衰减视图，不落库）+ 状态元数据
- *   - `POST /lepimemory/state`                           操作者；精确数值字段 → 固定原因 → 原子提交 + 完整审计
- *   - `GET  /lepimemory/history?kind=&limit=&offset=`    操作者；审计分页（真实 status + 摘要元数据）
+ *   - `POST /lepimemory/state[?preview=1]`               操作者；精确数值字段 → 固定原因 → （preview=1 时只 dry-run 不落库）原子提交 + 完整审计
+ *   - `GET  /lepimemory/history?kind=&limit=&offset=[&grouped=1]`  操作者；`grouped=1` 时按「主体」分组、以组为单位分页（审计分页仍是逐条）
  *   - `GET  /lepimemory/candidate?id=&reveal=`           操作者；已获准快照/生命周期/来源引用（无 heap 回退）
  *   - `POST /lepimemory/retry`                           操作者；按既有身份唤醒 request/task（不新开 operation）
+ *   - `GET  /lepimemory/avatar?key=`                     操作者；提供 assets/avatar/ 下清单内的立绘 GIF
  */
+import fs from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { decayMood } from "./machine.js";
-import { NUMERIC_FIELDS, renderState, validateState } from "./state.js";
+import { AVATAR_ASSETS } from "./avatar-assets.js";
+import { NUMERIC_FIELDS, renderState, toneOf, nearOf, validateState } from "./state.js";
 import { SCHEMA_VERSION } from "./store.js";
 
 /** 固定的运行时 Node（与 scripts/runtime.mjs `NODE_VERSION` 一致）。 */
@@ -40,6 +45,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** 操作者调整状态的固定原因（不接受自由文本原因）。 */
 const OPERATOR_CAUSE = "操作者调整演示状态";
 const RESUBMIT_CODE = "LEPI_INPUT_RESUBMIT_REQUIRED";
+
+/** 立绘素材目录（相对本模块解析，随插件 link 一起被 $DSH_HOME profile 引用）。 */
+const AVATAR_DIR = fileURLToPath(new URL("../assets/avatar/", import.meta.url));
+/** 立绘 key 形状：短、小写、可带连字符；只有清单内的 key 才会被读取。 */
+const AVATAR_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** key → { mtimeMs, buffer }：按 mtime 失效，替换素材后无需重启即生效。 */
+const avatarCache = new Map();
 
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const shortId = (id) => (typeof id === "string" && id.length > 8 ? id.slice(0, 8) : String(id ?? ""));
@@ -67,6 +79,18 @@ function summarize(row) {
     if (data.verdict) parts.push(`判定 ${data.verdict}`);
     if (data.reason_code) parts.push(`原因 ${data.reason_code}`);
     return `${parts.join(" · ")}${data.legacy ? "（历史记录）" : ""}`;
+}
+
+/** 审计行 → 面板 entry（`history` 与 `historyGroups` 两条路径共用同一投影）。 */
+function mapEntry(row) {
+    return {
+        id: row.id, at: row.at, type: row.type, status: row.status,
+        summary: summarize(row),
+        session_id: row.session_id ?? null, turn: row.turn ?? null, step: row.step ?? null,
+        call_id: row.call_id ?? null, request_id: row.request_id ?? null, task_id: row.task_id ?? null,
+        candidate_id: row.candidate_id ?? null, operation_id: row.operation_id ?? null,
+        data: isPlainObject(row.data) ? row.data : {},
+    };
 }
 
 function sendJson(res, status, body) {
@@ -189,6 +213,8 @@ function statePayload(store, coordinator, at) {
     return {
         ok: true,
         rendered: renderState(effective, at),
+        tone: toneOf(effective),
+        near: nearOf(effective),
         mood: effective.mood,
         relation: effective.relation,
         updatedAt: effective.mood.updatedAt,
@@ -228,6 +254,30 @@ function parseIntParam(raw, def, min, max) {
     const n = Number(raw);
     if (!Number.isSafeInteger(n) || n < min || n > max) return null;
     return n;
+}
+
+/**
+ * 由当前状态与操作者输入算出**下一个状态对象**（纯函数：不落库、不写审计）。
+ * 提交与 dry-run 预览共用同一算法，保证「预览所见」就是「提交将写入」。
+ */
+function nextStateFrom(current, input, at) {
+    const next = structuredClone(current);
+    const moodChange = Math.abs(input.mood.valence - current.mood.valence) + Math.abs(input.mood.arousal - current.mood.arousal);
+    const relChange = Math.abs(input.relation.trust - current.relation.trust)
+        + Math.abs(input.relation.closeness - current.relation.closeness)
+        + Math.abs(input.relation.familiarity - current.relation.familiarity);
+    next.mood.valence = input.mood.valence;
+    next.mood.arousal = input.mood.arousal;
+    next.relation.trust = input.relation.trust;
+    next.relation.closeness = input.relation.closeness;
+    next.relation.familiarity = input.relation.familiarity;
+    next.mood.updatedAt = new Date(at).toISOString();
+    const dimension = relChange > moodChange ? "relation" : "mood";
+    next.reasons = [
+        { dimension, text: OPERATOR_CAUSE, at: new Date(at).toISOString() },
+        ...current.reasons,
+    ].slice(0, 10);
+    return next;
 }
 
 // ── 安装 ────────────────────────────────────────────────────────────
@@ -288,6 +338,7 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                         return;
                     }
                     if (req.method !== "POST") return methodNotAllowed(res, ["GET", "POST"]);
+                    const preview = new URL(req.url ?? "/", "http://localhost").searchParams.get("preview") === "1";
                     const read = await readJsonBody(req, res);
                     if (!read.ok) return;
                     const input = operatorInput(read.value);
@@ -295,22 +346,20 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                     const at = Date.now();
                     try {
                         const current = store.readState();
-                        const next = structuredClone(current);
-                        const moodChange = Math.abs(input.mood.valence - current.mood.valence) + Math.abs(input.mood.arousal - current.mood.arousal);
-                        const relChange = Math.abs(input.relation.trust - current.relation.trust)
-                            + Math.abs(input.relation.closeness - current.relation.closeness)
-                            + Math.abs(input.relation.familiarity - current.relation.familiarity);
-                        next.mood.valence = input.mood.valence;
-                        next.mood.arousal = input.mood.arousal;
-                        next.relation.trust = input.relation.trust;
-                        next.relation.closeness = input.relation.closeness;
-                        next.relation.familiarity = input.relation.familiarity;
-                        next.mood.updatedAt = new Date(at).toISOString();
-                        const dimension = relChange > moodChange ? "relation" : "mood";
-                        next.reasons = [
-                            { dimension, text: OPERATOR_CAUSE, at: new Date(at).toISOString() },
-                            ...current.reasons,
-                        ].slice(0, 10);
+                        const next = nextStateFrom(current, input, at);
+                        if (preview) {
+                            // dry-run：只算渲染与基调，绝不 commitState、绝不写审计。
+                            if (!validateState(next).ok) { sendJson(res, 500, { ok: false, error: "LEPI_STATE_INVALID" }); return; }
+                            sendJson(res, 200, {
+                                ok: true,
+                                preview: true,
+                                rendered: renderState(next, at),
+                                tone: toneOf(next),
+                                mood: next.mood,
+                                relation: next.relation,
+                            });
+                            return;
+                        }
                         if (!validateState(next).ok) { sendJson(res, 500, { ok: false, error: "LEPI_STATE_INVALID" }); return; }
                         store.commitState(next, { at, type: "control", status: "state_set", data: { operator: true } });
                         sendJson(res, 200, statePayload(store, coordinator, at));
@@ -332,18 +381,19 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                     const limit = parseIntParam(url.searchParams.get("limit"), DEFAULT_LIMIT, 1, MAX_LIMIT);
                     const offset = parseIntParam(url.searchParams.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
                     if (limit === null || offset === null) { sendJson(res, 400, { ok: false, error: "invalid_pagination" }); return; }
+                    const grouped = url.searchParams.get("grouped") === "1";
+                    if (grouped) {
+                        let page;
+                        try { page = store.historyGroups({ kind, limit, offset }); }
+                        catch { sendJson(res, 500, { ok: false, error: "LEPI_STORE_UNAVAILABLE" }); return; }
+                        const groups = page.groups.map((g) => ({ key: g.key, truncated: g.truncated, entries: g.items.map(mapEntry) }));
+                        sendJson(res, 200, { ok: true, kind, grouped: true, total: page.total, offset, limit, groups });
+                        return;
+                    }
                     let page;
                     try { page = store.history({ kind, limit, offset }); }
                     catch { sendJson(res, 500, { ok: false, error: "LEPI_STORE_UNAVAILABLE" }); return; }
-                    const entries = page.items.map((row) => ({
-                        id: row.id, at: row.at, type: row.type, status: row.status,
-                        summary: summarize(row),
-                        session_id: row.session_id ?? null, turn: row.turn ?? null, step: row.step ?? null,
-                        call_id: row.call_id ?? null, request_id: row.request_id ?? null, task_id: row.task_id ?? null,
-                        candidate_id: row.candidate_id ?? null, operation_id: row.operation_id ?? null,
-                        data: isPlainObject(row.data) ? row.data : {},
-                    }));
-                    sendJson(res, 200, { ok: true, kind, total: page.total, offset, limit, entries });
+                    sendJson(res, 200, { ok: true, kind, total: page.total, offset, limit, entries: page.items.map(mapEntry) });
                 },
             };
 
@@ -470,10 +520,62 @@ export function installPanel(ctx, config, { logger, store, coordinator, control 
                 },
             };
 
-            disposers.push(server.register(stateRoute), server.register(historyRoute), server.register(candidateRoute), server.register(retryRoute));
+            /**
+             * 立绘素材路由：只按清单内的 key 提供 `assets/avatar/` 下的 GIF。
+             * 与其它数据路由同样走共享 connection 鉴权；未鉴权请求在读取任何素材之前被拒。
+             */
+            const avatarRoute = {
+                kind: "exact",
+                path: "/lepimemory/avatar",
+                handler: (req, res) => {
+                    if (rejected(res, connection, req)) return;
+                    if (req.method !== "GET") return methodNotAllowed(res, ["GET"]);
+                    const key = new URL(req.url ?? "/", "http://localhost").searchParams.get("key") ?? "";
+                    if (!AVATAR_KEY_RE.test(key) || !(key in AVATAR_ASSETS)) {
+                        sendJson(res, 404, { ok: false, error: "not_found" });
+                        return;
+                    }
+                    try {
+                        // 每次按 mtime 判定：素材被替换后无需重启进程即生效；
+                        // 命中 if-modified-since 时回 304，避免每次加载重传整帧。
+                        const file = path.join(AVATAR_DIR, AVATAR_ASSETS[key]);
+                        const stat = fs.statSync(file);
+                        const mtimeMs = Math.floor(stat.mtimeMs / 1000) * 1000;
+                        let entry = avatarCache.get(key);
+                        if (!entry || entry.mtimeMs !== mtimeMs) {
+                            entry = { mtimeMs, buffer: fs.readFileSync(file) };
+                            avatarCache.set(key, entry);
+                        }
+                        const lastModified = new Date(mtimeMs).toUTCString();
+                        const since = Date.parse(req.headers["if-modified-since"] ?? "");
+                        if (Number.isFinite(since) && since >= mtimeMs) {
+                            res.writeHead(304, { "cache-control": "private, no-cache", "last-modified": lastModified });
+                            res.end();
+                            return;
+                        }
+                        res.writeHead(200, {
+                            "content-type": "image/gif",
+                            "cache-control": "private, no-cache",
+                            "last-modified": lastModified,
+                            "content-length": entry.buffer.length,
+                        });
+                        res.end(entry.buffer);
+                    } catch {
+                        sendJson(res, 500, { ok: false, error: "LEPI_AVATAR_UNAVAILABLE" });
+                    }
+                },
+            };
+
+            disposers.push(
+                server.register(stateRoute),
+                server.register(historyRoute),
+                server.register(candidateRoute),
+                server.register(retryRoute),
+                server.register(avatarRoute),
+            );
         }
 
         scope.effect(() => () => { for (const dispose of disposers) dispose(); }, "lepimemory.panel.routes()");
-        logger.info("面板路由已装载：/lepimemory/health、state、history、candidate、retry");
+        logger.info("面板路由已装载：/lepimemory/health、state、history、candidate、retry、avatar");
     });
 }
