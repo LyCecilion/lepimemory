@@ -388,6 +388,7 @@ test('a policy change while reading preceding questions prevents understanding f
             async read() { return { sources: [source] }; },
             async recent() { store.policyEpoch++; return { sources: [] }; },
         },
+        // eslint-disable-next-line require-yield -- this stream throws before any chunk; it never yields by design
         llm: { async *stream() { throw new Error('A changed policy cannot reach the understanding model'); } },
     });
     await assert.rejects(processor.extract({ agent: {}, source_ids: [source.id] }), { code: 'LEPI_INPUT_RESUBMIT_REQUIRED' });
