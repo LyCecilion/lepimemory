@@ -6,9 +6,7 @@
     "types": ["node"],
     "declaration": false,
     "sourceMap": true,
-    "inlineSources": true,
-    "allowJs": true,
-    "checkJs": false
+    "inlineSources": true
   },
-  "include": ["src/**/*.ts", "src/**/*.js"]
+  "include": ["src/**/*.ts"]
 }

@@ -91,12 +91,6 @@ interface ToolArgs {
   source_ids: string[];
   query?: string;
 }
-/**
- * contracts.js is still JavaScript (checkJs=false), so its `constructor(issue, path = null)`
- * infers `path: null`. This narrow constructor alias restores the real (validated) signature
- * until that module is migrated; it constructs the same class at runtime.
- */
-const ContractErrorCtor = ContractError as unknown as new (issue: string, path?: string | null) => ContractError;
 interface ControlValue {
   requests: unknown[];
   context_guards: Array<{ source_ids: string[] }>;
@@ -119,7 +113,7 @@ async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
 }
 function parseArguments(raw: string): unknown {
   try { return JSON.parse(raw); }
-  catch { throw new ContractErrorCtor('schema', '$'); }
+  catch { throw new ContractError('schema', '$'); }
 }
 function route(value: RouteLike | undefined, provider: string): Route {
   return Object.freeze({ provider: value?.provider ?? provider, model: value?.model, configured: value?.configured !== false });
@@ -276,7 +270,7 @@ export function createProcessor({ llm, routes, evidence, store }: { llm: LlmRunt
               const primaryIds = primarySourceIds ?? new Set<string>();
               if (input.active_forget_selectors?.length && !controlValue.requests.length
                   && [...primaryIds].some(id => !controlValue.context_guards.some(guard => guard.source_ids.includes(id)))) {
-                throw new ContractErrorCtor('schema', 'context_guards');
+                throw new ContractError('schema', 'context_guards');
               }
             }
             check();
@@ -284,11 +278,11 @@ export function createProcessor({ llm, routes, evidence, store }: { llm: LlmRunt
           }
           if (kind === 'observation') fail('LEPI_EVIDENCE_BUDGET');
           const parsed = calls.map(call => {
-            if (!Object.hasOwn(TOOL_SCHEMAS as object, call.name)) throw new ContractErrorCtor('tool_args', '$');
+            if (!Object.hasOwn(TOOL_SCHEMAS as object, call.name)) throw new ContractError('tool_args', '$');
             const args = validateToolArgs(call.name, parseArguments(call.arguments)) as ToolArgs;
             if (call.name === 'fetch_context') {
               for (let i = 0; i < args.source_ids.length; i++) {
-                if (!contextSourceIds.has(args.source_ids[i] as string)) throw new ContractErrorCtor('source', `source_ids[${i}]`);
+                if (!contextSourceIds.has(args.source_ids[i] as string)) throw new ContractError('source', `source_ids[${i}]`);
               }
             }
             return { call, args };
@@ -317,10 +311,12 @@ export function createProcessor({ llm, routes, evidence, store }: { llm: LlmRunt
             messages.push(createToolResultMessage({ callId: call.id, content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }));
           }
         } catch (error) {
-          if (!(error instanceof ContractError) || !allowRepair || repaired) throw error;
+          // Narrow the caught `unknown` to the typed contract error before reading its fields.
+          const contractError = error instanceof ContractError ? error : null;
+          if (contractError === null || !allowRepair || repaired) throw error;
           repaired = true;
           // Never echo invalid arguments, unknown property names, or private values.
-          messages = [...initial, { role: 'user', content: [{ type: 'text', text: JSON.stringify({ repair: { code: error.code, path: error.path, issue: error.issue } }) }] }];
+          messages = [...initial, { role: 'user', content: [{ type: 'text', text: JSON.stringify({ repair: { code: contractError.code, path: contractError.path, issue: contractError.issue } }) }] }];
         }
       }
     }
