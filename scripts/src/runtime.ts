@@ -486,6 +486,27 @@ function ensureProfile(cfg: LepiConfig): ProfilePaths {
 }
 
 // ── external services (non-fatal) ────────────────────────────────────
+/** Official Hub endpoint, reachable through a proxy; the mirror only directly. */
+const OFFICIAL_HF_ENDPOINT = 'https://huggingface.co';
+
+/**
+ * Hub endpoint the memory-service images bake their pinned models from.
+ *
+ * An explicit `HF_ENDPOINT` (env or `.env`) always wins. Otherwise the egress
+ * decides, because the mirror and an HTTP proxy are *alternative* network
+ * paths rather than a pair: behind a proxy `hf-mirror.com` answers with a
+ * cross-domain 3xx redirect to `huggingface.co`, and the resolve response then
+ * carries no `X-Repo-Commit`, so `snapshot_download` aborts with
+ * FileMetadataError ("Distant resource does not seem to be on huggingface.co")
+ * even though the revision is pinned. Directly (no proxy) only the mirror is
+ * usable on campus networks — huggingface.co is DNS-poisoned there.
+ */
+function buildHfEndpoint(cfg: LepiConfig, env: NodeJS.ProcessEnv): string {
+  if ((env.HF_ENDPOINT ?? '').trim() !== '') return cfg.retrieval.hfEndpoint;
+  const proxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy || '';
+  return proxy.trim() === '' ? cfg.retrieval.hfEndpoint : OFFICIAL_HF_ENDPOINT;
+}
+
 function dockerEnv(cfg: LepiConfig): Record<string, string> {
   const route = cfg.llm.hindsight;
   return {
@@ -495,7 +516,7 @@ function dockerEnv(cfg: LepiConfig): Record<string, string> {
     HINDSIGHT_API_LLM_API_KEY: route.apiKey,
     HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: cfg.retrieval.embeddingsLocalModel,
     HINDSIGHT_API_RERANKER_LOCAL_MODEL: cfg.retrieval.rerankerLocalModel,
-    HF_ENDPOINT: cfg.retrieval.hfEndpoint,
+    HF_ENDPOINT: buildHfEndpoint(cfg, process.env),
     LEPI_LAYA_URL: cfg.services.laya.url,
     LEPI_LAYA_API_KEY: cfg.services.laya.apiKey,
   };
@@ -520,6 +541,9 @@ function startExternalServices(cfg: LepiConfig): void {
     warn('docker compose unavailable; memory services were not started (external dependency)');
     return;
   }
+  info(
+    `building memory-service images (pinned model bake endpoint: ${buildHfEndpoint(cfg, process.env)})`,
+  );
   const child = spawn('docker', ['compose', '--progress', 'plain', 'up', '-d', '--build'], {
     cwd: REPO_ROOT,
     stdio: 'inherit',

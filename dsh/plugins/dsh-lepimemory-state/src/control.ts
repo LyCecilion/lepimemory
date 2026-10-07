@@ -15,6 +15,8 @@ declare module '@deepseek-ai/dsh-llm' {
   }
 }
 import type { ContextFormed } from '@deepseek-ai/dsh-llm';
+import type { UserMessage } from '@deepseek-ai/dsh-llm';
+import type { Session } from '@deepseek-ai/dsh-session';
 
 const PARAMETERS: JsonSchemaNode = {
   type: 'object',
@@ -42,12 +44,8 @@ const RESUBMIT = 'LEPI_INPUT_RESUBMIT_REQUIRED';
 /** 边界读取：只取 id 与 session id。 */
 interface AgentLike {
   id: string;
-  session?: { id?: string } | null;
+  session?: Pick<Session, 'id' | 'seq' | 'append' | 'snapshotEvents'> | null;
   steer(message: unknown): unknown;
-}
-interface FrameMessage {
-  id: string;
-  source?: { kind?: string } | null;
 }
 interface SessionSourceLike {
   id: string;
@@ -152,15 +150,20 @@ interface ProcessorLike {
 }
 interface HistoryLike {
   plan(requestId: string, candidateIds: string[]): Promise<unknown>;
+  quarantineInput(
+    session: NonNullable<AgentLike['session']>,
+    messages: readonly UserMessage[],
+  ): void;
 }
 interface RejectDecision {
   kind: string;
   messages?: readonly unknown[];
+  receiptRequestIds?: string[];
 }
 type NextFn = () => Promise<RejectDecision>;
 interface HookFrame {
   agent: AgentLike;
-  messages?: readonly FrameMessage[];
+  messages?: readonly UserMessage[];
   turn?: number;
   step?: number;
   signal?: AbortSignal;
@@ -1012,6 +1015,36 @@ export function createControl({
     }
     return true;
   }
+  function inputCommitted(frame: HookFrame, id: string): boolean {
+    const session = frame.agent.session;
+    if (!session) throw new Error(UNAVAILABLE);
+    return session
+      .snapshotEvents()
+      .some((event) => event.type === 'user/message' && event.data.id === id);
+  }
+  function commitInput(frame: HookFrame): void {
+    for (const message of frame.messages ?? []) {
+      if (message.source?.kind !== 'user' || inputCommitted(frame, message.id)) continue;
+      frame.agent.session!.append('user/message', message, { surfaceOp: 'append' });
+    }
+  }
+  async function enter(
+    frame: HookFrame,
+    next: NextFn,
+    receiptText?: string,
+  ): Promise<RejectDecision> {
+    const decision = await next();
+    if (decision.kind === 'reject') return decision;
+    const alreadyCommitted = (message: unknown): boolean => {
+      const input = message as UserMessage;
+      return input.source?.kind === 'user' && inputCommitted(frame, input.id);
+    };
+    if (!receiptText && !decision.messages?.some(alreadyCommitted)) return decision;
+    const messages = (decision.messages ?? []).filter((message) => !alreadyCommitted(message));
+    if (receiptText || !messages.length)
+      messages.push(notice(receiptText ?? '先前暂停的输入已通过检查，可以继续回应。'));
+    return { ...decision, messages };
+  }
   function park(frame: HookFrame, ids: string[], code = UNAVAILABLE): RequestRow {
     const row = register('check', ids, frame);
     const updated = update(row, code === RESUBMIT ? 'resubmit_required' : 'parked', code);
@@ -1019,6 +1052,19 @@ export function createControl({
       for (const message of frame.messages!)
         if (message.source?.kind === 'user') frame.agent.steer(message);
     return updated;
+  }
+  function rejectChangedPolicy(frame: HookFrame, ids: string[], epoch: number): RejectDecision {
+    const cause = frame.signal?.reason as { kind?: unknown; reason?: unknown } | undefined;
+    const policyAbort = cause?.kind === 'hook' && cause.reason === 'lepimemory-forget';
+    const liveRace =
+      epoch !== store.policyEpoch && !disposed && (!frame.signal?.aborted || policyAbort);
+    if (liveRace) {
+      if (!frame.agent.session) throw new Error(UNAVAILABLE);
+      history.quarantineInput(frame.agent.session, frame.messages!);
+    }
+    park(frame, ids, RESUBMIT);
+    if (liveRace) throw Object.assign(new Error(RESUBMIT), { code: RESUBMIT });
+    return { kind: 'reject' };
   }
   async function beforeStep(frame: HookFrame, next: NextFn): Promise<RejectDecision> {
     if (disposed || blocked(frame.agent)) return { kind: 'reject' };
@@ -1031,7 +1077,7 @@ export function createControl({
     if (!users.length) return next();
     const ids = evidence.claimed(frame.agent, users, frame.turn!, frame.step!);
     const epoch = store.policyEpoch;
-    const messageIds = new Set(users.map((message) => message.id));
+    const messageIds = new Set<string>(users.map((message) => message.id));
     const prior = (
       db
         .prepare(
@@ -1067,6 +1113,7 @@ export function createControl({
     let result: ControlResult;
     let sources: SessionSourceLike[];
     let contextSources: SessionSourceLike[];
+    let guarded = false;
     try {
       if (!ids.length) throw new Error(UNAVAILABLE);
       if (ids.some((id) => !findEvidence.get(id))) throw new Error(UNAVAILABLE);
@@ -1101,19 +1148,22 @@ export function createControl({
       );
       if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal?.aborted)
         throw new Error(RESUBMIT);
-      if (
-        !result.requests.length &&
-        (!(await guardsAllowed(result, frame, sources, contextSources)) ||
-          epoch !== store.policyEpoch ||
-          blocked(frame.agent) ||
-          frame.signal!.aborted)
-      )
-        throw new Error(RESUBMIT);
+      if (!result.requests.length) {
+        const allowed = await guardsAllowed(result, frame, sources, contextSources);
+        if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal!.aborted)
+          throw new Error(RESUBMIT);
+        // 命中 active forget 范围的再次提及：不给本轮记忆权限（不设 context、不建请求），
+        // 抑制由 authorizer.suppressionMatch 强制。但绝不因此阻断或吞掉用户这条新输入。
+        guarded = !allowed;
+      }
     } catch (error) {
       const code = error && typeof error === 'object' && 'message' in error ? error.message : null;
       const explicit = error && typeof error === 'object' && 'code' in error ? error.code : null;
-      park(frame, ids, code === RESUBMIT || explicit === RESUBMIT ? RESUBMIT : UNAVAILABLE);
-      return { kind: 'reject' };
+      const resubmit = code === RESUBMIT || explicit === RESUBMIT;
+      if (resubmit || epoch !== store.policyEpoch) return rejectChangedPolicy(frame, ids, epoch);
+      if (!blocked(frame.agent)) commitInput(frame);
+      park(frame, ids, UNAVAILABLE);
+      throw Object.assign(new Error(UNAVAILABLE), { code: UNAVAILABLE });
     }
     const checked = register('check', ids, frame);
     store.transaction(() => {
@@ -1122,29 +1172,53 @@ export function createControl({
           "UPDATE requests SET status='checked',error_code=NULL,updated_at=? WHERE id=?",
         ).run(now(), row.id);
       }
-      audit('control.check', 'checked', { ...frame, request_id: checked.id }, { source_ids: ids });
+      audit(
+        'control.check',
+        'checked',
+        { ...frame, request_id: checked.id },
+        {
+          source_ids: ids,
+          guarded,
+        },
+      );
     });
-    contexts.set(frame.agent.id, {
-      epoch,
-      source_ids: ids,
-      turn: frame.turn,
-      step: frame.step,
-      result,
-    });
+    // guard 命中：本轮不授予记忆权限，缺少 context 的记忆工具请求不会获得执行权限。
+    if (!guarded)
+      contexts.set(frame.agent.id, {
+        epoch,
+        source_ids: ids,
+        turn: frame.turn,
+        step: frame.step,
+        result,
+      });
     if (result.requests.length) {
-      for (const request of [...result.requests].sort(
-        (a, b) => negativeFirst(a) - negativeFirst(b),
-      ))
-        await dispatch(request, frame);
-      return { kind: 'reject' };
+      const requests = [...result.requests].sort((a, b) => negativeFirst(a) - negativeFirst(b));
+      // 破坏性请求必须先提交输入，让 history.plan 的隔离窗口包含本轮命令。
+      // 之后不能用 pre-step 之前形成的旧 assembly 发起角色请求。
+      if (requests.some((request) => request.kind !== 'remember')) commitInput(frame);
+      const rows: RequestRow[] = [];
+      for (const request of requests) rows.push(await dispatch(request, frame));
+      if (epoch !== store.policyEpoch || blocked(frame.agent)) {
+        if (requests.every((request) => request.kind === 'remember') && frame.agent.session)
+          history.quarantineInput(frame.agent.session, users);
+        return { kind: 'reject', receiptRequestIds: rows.map((row) => row.id) };
+      }
+      const text = `【系统回执；这些请求已由控制层处理，不重复执行；状态不等于入库成功】\n${rows
+        .map(
+          (row) =>
+            `request=${row.id}: ${row.status}${row.error_code ? ` (${row.error_code})` : ''}`,
+        )
+        .join('\n')}`;
+      const decision = await enter(frame, next, text);
+      if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal?.aborted)
+        return rejectChangedPolicy(frame, ids, epoch);
+      return decision;
     }
-    if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal!.aborted) {
-      park(frame, ids, RESUBMIT);
-      return { kind: 'reject' };
-    }
-    const decision = await next();
+    if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal!.aborted)
+      return rejectChangedPolicy(frame, ids, epoch);
+    const decision = await enter(frame, next);
     if (epoch !== store.policyEpoch || blocked(frame.agent) || frame.signal?.aborted)
-      return { kind: 'reject' };
+      return rejectChangedPolicy(frame, ids, epoch);
     return decision;
   }
 

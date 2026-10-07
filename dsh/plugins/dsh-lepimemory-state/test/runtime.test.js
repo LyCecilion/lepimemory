@@ -1056,7 +1056,7 @@ test('parked input needs an operator retry and cannot evade a later forget fence
   f.processor.checkControl = async () => {
     throw new Error('synthetic outage');
   };
-  assert.deepEqual(await f.control.beforeStep(frame, next), { kind: 'reject' });
+  await assert.rejects(f.control.beforeStep(frame, next), { code: 'LEPI_CONTROL_UNAVAILABLE' });
   const parked = f.store.db.prepare("SELECT * FROM requests WHERE kind='check'").get();
   f.processor.checkControl = async () => ({
     requests: [],
@@ -1073,7 +1073,7 @@ test('parked input needs an operator retry and cannot evade a later forget fence
   f.processor.checkControl = async () => {
     throw new Error('synthetic outage');
   };
-  await f.control.beforeStep(frame, next);
+  await assert.rejects(f.control.beforeStep(frame, next), { code: 'LEPI_CONTROL_UNAVAILABLE' });
   f.store.transaction(() => {
     const epoch = f.store.bumpPolicyEpoch();
     f.store.db
@@ -1402,7 +1402,7 @@ test('an aborted turn with only committed user input is not a delivered memory r
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM tasks').get().n, 0);
 });
 
-test('a rejected native control step hands off only its exact request sources to the worker', async (t) => {
+test('a checker-dispatched retain enters the turn and hands off only its exact request sources', async (t) => {
   const f = await schedulerFixture(t, 'private');
   f.processor.checkControl = async () => ({
     requests: [
@@ -1418,22 +1418,18 @@ test('a rejected native control step hands off only its exact request sources to
   f.onQuestion((request) => ({
     answers: [{ id: request.questions[0].id, selected: ['允许这条'] }],
   }));
-  assert.deepEqual(
-    await f.control.beforeStep(
-      { agent: f.agent, messages: [f.message], turn: 1, step: 1 },
-      async () => {
-        throw new Error('A pure memory operation cannot enter the role');
-      },
-    ),
-    { kind: 'reject' },
+  const message = f.message;
+  await f.control.beforeStep(
+    { agent: f.agent, messages: [message], turn: 1, step: 1 },
+    async () => ({ kind: 'enter', messages: [message] }),
+  );
+  assert.equal(
+    f.store.db.prepare("SELECT status FROM requests WHERE kind='remember'").get().status,
+    'queued',
   );
   f.evidence.observe(
     f.session,
-    f.session.append('turn/end', { turn: 1, reason: { kind: 'blocked' } }),
-  );
-  assert.equal(
-    (await f.evidence.read(f.candidate.source_ids, { agent: f.agent })).sources.length,
-    0,
+    f.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } }),
   );
   f.memory.start();
   await waitUntil(() =>
@@ -1463,6 +1459,45 @@ test('a rejected native control step hands off only its exact request sources to
         })),
     }),
   );
+});
+
+test('a fresh utterance touching an active forget scope still enters the turn without memory authority', async (t) => {
+  const f = await nativeControlFixture(t);
+  const { message, candidate } = f.input('合成再次提及已忘却范围的新表达');
+  f.store.transaction(() => {
+    const epoch = f.store.bumpPolicyEpoch();
+    f.store.db
+      .prepare(
+        'INSERT INTO forget_scopes(id,request_id,candidate_ids_json,selector_json,active,epoch) VALUES (?,?,?,?,1,?)',
+      )
+      .run(
+        randomUUID(),
+        randomUUID(),
+        '[]',
+        JSON.stringify({ subject_key: 'user', facet_key: 'synthetic-sleep' }),
+        epoch,
+      );
+  });
+  f.processor.checkControl = async () => ({
+    requests: [],
+    context_guards: [
+      { source_ids: candidate.source_ids, subject_key: 'user', facet_key: 'synthetic-sleep' },
+    ],
+  });
+  f.processor.matchGrant = async () => ({ match: 'covered' });
+  const decision = await f.control.beforeStep(
+    { agent: f.agent, messages: [message], turn: 1, step: 1, signal: new AbortController().signal },
+    async () => ({ kind: 'enter', messages: [message] }),
+  );
+  // 再次提及已忘却范围不等于「旧输入」：抑制由 authorizer 强制，但用户这条新消息不能被吞掉。
+  assert.equal(decision.kind, 'enter');
+  assert.deepEqual(decision.messages, [message]);
+  assert.equal(
+    f.store.db.prepare("SELECT count(*) AS n FROM requests WHERE kind!='check'").get().n,
+    0,
+  );
+  const row = f.store.db.prepare("SELECT data_json FROM audit WHERE type='control.check'").get();
+  assert.equal(JSON.parse(row.data_json).guarded, true);
 });
 
 test('a private value defer does not leave a durable body or an automatic consent retry', async (t) => {

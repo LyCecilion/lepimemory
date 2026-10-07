@@ -4,8 +4,8 @@ import {
   createSystemMessage,
   createDeveloperMessage,
 } from '@deepseek-ai/dsh-llm';
-import type { ContextFormed, Message } from '@deepseek-ai/dsh-llm';
-import type { SessionEvent } from '@deepseek-ai/dsh-session';
+import type { ContextFormed, Message, UserMessage } from '@deepseek-ai/dsh-llm';
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import { deriveEventMessage } from '@deepseek-ai/dsh-session/surface';
 import { toolPairingBalancedBefore, toolPairingBalancedAfter } from '@deepseek-ai/dsh-compaction';
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt';
@@ -72,6 +72,7 @@ interface RequestRow {
   status: string;
   session_id: string;
   payload_json: string;
+  error_code: string | null;
 }
 
 interface SafeNode {
@@ -117,6 +118,7 @@ interface SessionQueryLike {
 interface SessionHandle {
   id: string;
   seq: number;
+  firstLiveSeq: number;
   append(type: string, payload: unknown, intent?: unknown): unknown;
 }
 interface MaintenanceAgent {
@@ -227,6 +229,7 @@ export function createHistoryCoordinator({
   const permits = new Map<string, number>();
   const preparing = new Map<string, Promise<Prepared | null>>();
   const sweeping = new Map<string, Promise<boolean>>();
+  const receipts = new Map<string, string[]>();
   const owned = new Set<Promise<unknown>>();
   let disposed = false;
   const db = () => store.db;
@@ -289,7 +292,42 @@ export function createHistoryCoordinator({
   }
   function ensureEnrolled(agent: MaintenanceAgent): void {
     const scope = latestScope();
-    if (scope) enroll(sid(agent), scope.epoch, [scope.request_id], agent.session.seq - 1);
+    // Enrollment may run after the first inbox claim. Only the immutable restored/seeded
+    // prefix is old history; a fresh session's first input is already live material.
+    if (scope) enroll(sid(agent), scope.epoch, [scope.request_id], agent.session.firstLiveSeq - 1);
+  }
+  function quarantineInput(
+    session: Pick<Session, 'id' | 'seq' | 'append' | 'snapshotEvents'>,
+    messages: readonly UserMessage[],
+  ): void {
+    if (disposed) throw new Error(UNAVAILABLE);
+    const pending = messages.filter(
+      (message) =>
+        message.source.kind === 'user' &&
+        !session
+          .snapshotEvents()
+          .some((event) => event.type === 'user/message' && event.data.id === message.id),
+    );
+    const scope = latestScope();
+    if (scope) {
+      // Close the model/evidence gate before recording the still-live input. Even
+      // an already completed history cut must now prove the appended material.
+      store.transaction(() => {
+        enroll(session.id, scope.epoch, [scope.request_id], session.seq - 1);
+        const row = allRows(session.id).find((item) => item.epoch === scope.epoch)!;
+        const plan = parse(row);
+        record(
+          row,
+          'pending',
+          {
+            ...plan,
+            fence_seq: Math.max(plan.fence_seq ?? -1, session.seq + pending.length - 1),
+          },
+          BLOCKED,
+        );
+      });
+    }
+    for (const message of pending) session.append('user/message', message, { surfaceOp: 'append' });
   }
 
   async function enumerate(
@@ -1056,7 +1094,33 @@ export function createHistoryCoordinator({
             request_id: string;
           }>
         ).map((row) => row.request_id);
-        return ids.map(finish).every(Boolean);
+        const finished = ids.map(finish).every(Boolean);
+        for (const [id, requestIds] of receipts) {
+          if (disposed) break;
+          const agent = ctx.agents.get(id);
+          if (!agent) {
+            receipts.delete(id);
+            continue;
+          }
+          if (agent.status !== 'idle' || !(await applyPending(agent))) continue;
+          const rows = requestIds.map(request);
+          if (rows.some((row) => !row || row.session_id !== sid(agent)))
+            throw new Error(UNAVAILABLE);
+          const text = `【系统回执：请向用户确认以下记忆操作的实际状态，不复述原内容、不重复执行。已停止使用不代表后端清理完成。】\n${rows
+            .map(
+              (row) =>
+                `request=${row!.id}: ${row!.status}${row!.error_code ? ` (${row!.error_code})` : ''}`,
+            )
+            .join('\n')}`;
+          const message = createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: 'lepimemory-control', form: 'notice', summary: '记忆操作回执' },
+          });
+          receipts.delete(id);
+          // Fresh native turn: assembly and policy are rebuilt after the canonical cutover.
+          agent.send(message, 'next-turn', true);
+        }
+        return finished;
       })(),
     );
     sweeping.set(key, work);
@@ -1074,11 +1138,19 @@ export function createHistoryCoordinator({
     await Promise.allSettled([...owned]);
     permits.clear();
     tickets.clear();
+    receipts.clear();
   }
   return {
     plan: (requestId: string, candidateIds: string[]) => own(plan(requestId, candidateIds)),
     applyPending,
     sweep,
+    quarantineInput,
+    queueReceipt(agent: MaintenanceAgent, requestIds: string[]): void {
+      if (disposed) return;
+      const pending = receipts.get(agent.id);
+      if (pending) pending.push(...requestIds);
+      else receipts.set(agent.id, requestIds);
+    },
     isReadable,
     beforeStep,
     beforeRequest,

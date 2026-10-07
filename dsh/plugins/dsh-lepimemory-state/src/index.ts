@@ -289,8 +289,8 @@ export function apply(ctx: Context, options: LepiOptions = {}): void {
   ctx.on(
     'agent/pre-step',
     (frame, next) => {
-      const run = () =>
-        control.beforeStep(frame, async () => {
+      const run = async () => {
+        const decision = await control.beforeStep(frame, async () => {
           const epoch = store.policyEpoch;
           const decision = await next();
           if (decision.kind === 'reject' || frame.signal.aborted || disposed)
@@ -326,6 +326,10 @@ export function apply(ctx: Context, options: LepiOptions = {}): void {
           if (receipt) messages.push(receipt);
           return { ...decision, messages };
         });
+        if (decision.receiptRequestIds)
+          history.queueReceipt(frame.agent as never, decision.receiptRequestIds);
+        return decision;
+      };
       return history.beforeStep(frame as never, run as never) as never;
     },
     { prepend: true },

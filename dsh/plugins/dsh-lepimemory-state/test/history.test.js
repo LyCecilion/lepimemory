@@ -25,6 +25,7 @@ import { openStore } from '../lib/store.js';
 import { createEvidenceIndex } from '../lib/evidence.js';
 import { createHistoryCoordinator } from '../lib/history.js';
 import { createProcessor } from '../lib/processor.js';
+import { createControl } from '../lib/control.js';
 
 const rootRequire = createRequire(new URL('../../../../package.json', import.meta.url));
 const nativeRequire = createRequire(rootRequire.resolve('@deepseek-ai/dsh/package.json'));
@@ -126,7 +127,7 @@ const processorToolCall = (name, args) => {
   ];
 };
 
-async function nativeHistoryFixture(t, { real = false } = {}) {
+async function nativeHistoryFixture(t, { real = false, controls = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lep-history-test-'));
   const ctx = new Context();
   const fibers = [];
@@ -135,6 +136,7 @@ async function nativeHistoryFixture(t, { real = false } = {}) {
   const captures = [];
   let respond = () => textChunks();
   let decide = defaultDecide;
+  let checkControl = () => ({ requests: [], context_guards: [] });
 
   const boot = async (name, config) => {
     const fiber = ctx.plugin(nativeRequire(name).default, config);
@@ -148,6 +150,7 @@ async function nativeHistoryFixture(t, { real = false } = {}) {
     '@deepseek-ai/dsh-tools',
     '@deepseek-ai/dsh-system-prompt',
     '@deepseek-ai/dsh-session-projection',
+    '@deepseek-ai/dsh-user-questions',
   ])
     await boot(name);
   await boot('@deepseek-ai/dsh-session-persistence-jsonl', { root: path.join(home, 'sessions') });
@@ -201,12 +204,35 @@ async function nativeHistoryFixture(t, { real = false } = {}) {
         evidence,
         store,
       })
-    : { redactHistory: (input) => Promise.resolve(decide(input)) };
+    : {
+        redactHistory: (input) => Promise.resolve(decide(input)),
+        checkControl: (input) => Promise.resolve(checkControl(input)),
+        matchGrant: async () => ({ match: 'not_covered' }),
+      };
   const coordinator = createHistoryCoordinator({ ctx, store, processor, evidence });
+  const control = controls
+    ? createControl({
+        ctx,
+        store,
+        processor,
+        evidence,
+        history: coordinator,
+        enqueue: async () => {},
+      })
+    : null;
   removers.push(
-    ctx.on('agent/pre-step', (frame, next) => coordinator.beforeStep(frame, next), {
-      prepend: true,
-    }),
+    ctx.on(
+      'agent/pre-step',
+      (frame, next) =>
+        coordinator.beforeStep(frame, async () => {
+          if (!control) return next();
+          const decision = await control.beforeStep(frame, next);
+          if (decision.receiptRequestIds)
+            coordinator.queueReceipt(frame.agent, decision.receiptRequestIds);
+          return decision;
+        }),
+      { prepend: true },
+    ),
   );
   removers.push(
     ctx.on('agent/request', (frame, next) => coordinator.beforeRequest(frame, next), {
@@ -290,6 +316,7 @@ async function nativeHistoryFixture(t, { real = false } = {}) {
 
   t.after(async () => {
     for (const remove of removers) remove();
+    await control?.dispose();
     await coordinator.dispose();
     for (const handle of handles) await handle.dispose();
     detachAdapter();
@@ -313,6 +340,9 @@ async function nativeHistoryFixture(t, { real = false } = {}) {
     seedReason,
     handles,
     home,
+    setCheckControl(fn) {
+      checkControl = fn;
+    },
     setDecide(fn) {
       decide = fn;
     },
@@ -926,4 +956,245 @@ test('a fork after isolation reuses only the proved prefix and an obsolete inher
     assert.equal(wire.includes(TOKEN), false);
     if (clean) assert.equal(wire.includes('Independent inherited safe statement.'), true);
   }
+});
+
+test('a native remember turn durably retains the user command and the role response', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  f.setCheckControl(({ sources }) => ({
+    requests: [
+      { kind: 'remember', source_ids: sources.map((source) => source.id), candidate_ids: [] },
+    ],
+    context_guards: [],
+  }));
+  f.setRespond(() => textChunks('REMEMBER_ROLE_RESPONSE'));
+  const command = await f.say(handle.agent, 'Remember that my synthetic favorite color is teal.');
+  await f.ctx.sessions.flush(handle.agent.session);
+  const surface = await f.ctx.sessionQuery.readSurface(handle.agent.session.id);
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === command.id),
+    true,
+  );
+  assert.equal(JSON.stringify(surface.events).includes('REMEMBER_ROLE_RESPONSE'), true);
+  assert.equal(
+    f.store.db.prepare("SELECT status FROM requests WHERE kind='remember'").get().status,
+    'queued',
+  );
+  assert.equal(
+    JSON.stringify(f.captures.at(-1).messages).includes('synthetic favorite color is teal'),
+    true,
+  );
+});
+
+test('a native forget command remains visible and gets a fresh reply without reviving the forgotten target', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  const target = await f.say(handle.agent, `My synthetic secret is ${TOKEN}.`);
+  const safe = await f.say(handle.agent, 'Independent safe conversation survives.');
+  const candidateId = f.seedCandidate({ text: TOKEN, sourceIds: [f.evidenceIdFor(target.id)] });
+  f.ctx.on('user-questions/request', (request) => ({
+    answers: [{ id: request.questions[0].id, selected: [request.questions[0].options[0].label] }],
+  }));
+  f.setCheckControl(({ sources }) => ({
+    requests: [
+      {
+        kind: 'forget',
+        source_ids: sources.map((source) => source.id),
+        candidate_ids: [candidateId],
+      },
+    ],
+    context_guards: [],
+  }));
+  f.setRespond(() => textChunks('FORGET_ROLE_ACKNOWLEDGEMENT'));
+  const command = await f.say(
+    handle.agent,
+    'Forget the synthetic secret, but keep this request visible.',
+  );
+  assert.equal(
+    f.store.db.prepare('SELECT status FROM lifecycle WHERE candidate_id=?').get(candidateId).status,
+    'forgotten',
+  );
+  await f.coordinator.sweep();
+  await handle.agent.whenIdle();
+  await f.ctx.sessions.flush(handle.agent.session);
+  const surface = await f.ctx.sessionQuery.readSurface(handle.agent.session.id);
+  const wire = JSON.stringify(surface.events);
+  assert.equal(wire.includes(TOKEN), false);
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === command.id),
+    true,
+  );
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === safe.id),
+    true,
+  );
+  assert.equal(wire.includes('FORGET_ROLE_ACKNOWLEDGEMENT'), true);
+  const nextRequest = JSON.stringify(f.captures.at(-1).messages);
+  assert.equal(nextRequest.includes(TOKEN), false);
+  assert.equal(nextRequest.includes('local_isolated'), true);
+  assert.equal(nextRequest.includes('local_isolating'), false);
+  assert.equal(
+    handle.agent.session.log.filter(
+      (event) => event.type === 'user/message' && event.data.id === command.id,
+    ).length,
+    1,
+  );
+});
+
+test('a native control outage keeps the user input and error visible without calling the role', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  f.setCheckControl(() => {
+    throw new Error('Synthetic unavailable checker');
+  });
+  const command = await f.say(handle.agent, 'A fresh synthetic memory request during an outage.');
+  await f.ctx.sessions.flush(handle.agent.session);
+  const surface = await f.ctx.sessionQuery.readSurface(handle.agent.session.id);
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === command.id),
+    true,
+  );
+  const end = handle.agent.session.log.find((event) => event.type === 'turn/end');
+  assert.equal(end.data.reason.kind, 'error');
+  assert.equal(end.data.reason.error.message.includes('LEPI_CONTROL_UNAVAILABLE'), true);
+  assert.equal(f.captures.length, 0);
+  assert.equal(
+    f.store.db.prepare("SELECT status FROM requests WHERE kind='check'").get().status,
+    'parked',
+  );
+});
+
+test('the first greeting in a new native session after an earlier forget is not mistaken for old inbox material', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const old = await f.create();
+  const target = await f.say(old.agent, `A previous private code is ${TOKEN}.`);
+  const candidateId = f.seedCandidate({ text: TOKEN, sourceIds: [f.evidenceIdFor(target.id)] });
+  const requestId = f.seedRequest(old.agent.session.id);
+  await f.coordinator.plan(requestId, [candidateId]);
+  await f.coordinator.sweep(requestId);
+  const fresh = await f.create();
+  f.setRespond(() => textChunks('FRESH_GREETING_RESPONSE'));
+  const greeting = await f.say(fresh.agent, '你好呀——');
+  await f.ctx.sessions.flush(fresh.agent.session);
+  const surface = await f.ctx.sessionQuery.readSurface(fresh.agent.session.id);
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === greeting.id),
+    true,
+  );
+  assert.equal(JSON.stringify(surface.events).includes('FRESH_GREETING_RESPONSE'), true);
+  const wire = JSON.stringify(f.captures.at(-1).messages);
+  assert.equal(wire.includes('你好呀——'), true);
+  assert.equal(wire.includes(TOKEN), false);
+  assert.equal(
+    f.store.db
+      .prepare("SELECT status FROM requests WHERE session_id=? AND kind='check'")
+      .get(fresh.agent.session.id).status,
+    'checked',
+  );
+});
+
+test('a fresh input racing a forget stays visible as an error and is quarantined before later role requests', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  const target = await f.say(handle.agent, `The old synthetic target is ${TOKEN}.`);
+  const candidateId = f.seedCandidate({ text: TOKEN, sourceIds: [f.evidenceIdFor(target.id)] });
+  const requestId = f.seedRequest(handle.agent.session.id);
+  f.setCheckControl(async () => {
+    await f.coordinator.plan(requestId, [candidateId]);
+    return { requests: [], context_guards: [] };
+  });
+  const fresh = await f.say(handle.agent, 'A live unrelated greeting during the policy change.');
+  assert.equal(
+    handle.agent.session.log.some(
+      (event) => event.type === 'user/message' && event.data.id === fresh.id,
+    ),
+    true,
+  );
+  const end = handle.agent.session.log.filter((event) => event.type === 'turn/end').at(-1);
+  assert.equal(end.data.reason.kind, 'error');
+  assert.equal(end.data.reason.error.message.includes('LEPI_INPUT_RESUBMIT_REQUIRED'), true);
+  const gate = f.store.db
+    .prepare('SELECT status FROM history_work WHERE session_id=?')
+    .get(handle.agent.session.id);
+  assert.equal(gate.status, 'pending');
+  await f.coordinator.sweep();
+  f.setCheckControl(() => ({ requests: [], context_guards: [] }));
+  await f.say(handle.agent, 'An independent follow-up after isolation.');
+  const wire = JSON.stringify(f.captures.at(-1).messages);
+  assert.equal(wire.includes(TOKEN), false);
+  assert.equal(wire.includes('A live unrelated greeting during the policy change.'), true);
+  assert.equal(
+    handle.agent.session.log.filter(
+      (event) => event.type === 'user/message' && event.data.id === fresh.id,
+    ).length,
+    1,
+  );
+});
+
+test('an epoch race without a forget still records the fresh input and native resubmit error', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  f.setCheckControl(() => {
+    f.store.transaction(() => f.store.bumpPolicyEpoch());
+    return { requests: [], context_guards: [] };
+  });
+  const fresh = await f.say(handle.agent, 'A fresh input racing an authorization change.');
+  const surface = await f.ctx.sessionQuery.readSurface(handle.agent.session.id);
+  assert.equal(
+    surface.events.some((event) => event.type === 'user/message' && event.data.id === fresh.id),
+    true,
+  );
+  const end = handle.agent.session.log.filter((event) => event.type === 'turn/end').at(-1);
+  assert.equal(end.data.reason.kind, 'error');
+  assert.equal(f.captures.length, 0);
+});
+
+test('a concurrent forget from another native agent cannot erase a claimed fresh input when it cancels the driver', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const owner = await f.create();
+  const target = await f.say(owner.agent, `Another session target is ${TOKEN}.`);
+  const candidateId = f.seedCandidate({ text: TOKEN, sourceIds: [f.evidenceIdFor(target.id)] });
+  const requestId = f.seedRequest(owner.agent.session.id);
+  const active = await f.create();
+  f.setCheckControl(async () => {
+    await f.coordinator.plan(requestId, [candidateId]);
+    return { requests: [], context_guards: [] };
+  });
+  const fresh = await f.say(active.agent, 'Live independent input before another agent forgets.');
+  assert.equal(
+    active.agent.session.log.some(
+      (event) => event.type === 'user/message' && event.data.id === fresh.id,
+    ),
+    true,
+  );
+  const end = active.agent.session.log.filter((event) => event.type === 'turn/end').at(-1);
+  assert.equal(end.data.reason.kind, 'aborted');
+  assert.equal(end.data.reason.reason.reason, 'lepimemory-forget');
+  await f.coordinator.sweep();
+  f.setCheckControl(() => ({ requests: [], context_guards: [] }));
+  await f.say(active.agent, 'A later independent input.');
+  const wire = JSON.stringify(f.captures.at(-1).messages);
+  assert.equal(wire.includes('Live independent input before another agent forgets.'), true);
+  assert.equal(wire.includes(TOKEN), false);
+});
+
+test('a policy change during the downstream pre-step hook preserves input instead of silently rejecting the stale decision', async (t) => {
+  const f = await nativeHistoryFixture(t, { controls: true });
+  const handle = await f.create();
+  const remove = f.ctx.on('agent/pre-step', async (_frame, next) => {
+    const decision = await next();
+    f.store.transaction(() => f.store.bumpPolicyEpoch());
+    return decision;
+  });
+  t.after(remove);
+  const fresh = await f.say(handle.agent, 'A live input racing downstream policy work.');
+  assert.equal(
+    handle.agent.session.log.some(
+      (event) => event.type === 'user/message' && event.data.id === fresh.id,
+    ),
+    true,
+  );
+  const end = handle.agent.session.log.filter((event) => event.type === 'turn/end').at(-1);
+  assert.equal(end.data.reason.kind, 'error');
+  assert.equal(f.captures.length, 0);
 });

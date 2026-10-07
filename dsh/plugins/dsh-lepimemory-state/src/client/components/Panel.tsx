@@ -12,7 +12,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { UseChat } from '@deepseek-ai/dsh-client-ui-chat/client';
 import { deriveChatSignal, resolveActivity } from '../../shared/activity.js';
-import { GROUPS, STYLE_PLUGIN_ID, type Kind } from '../constants.js';
+import { GROUPS, type Kind } from '../constants.js';
 import {
   useCandidateDetails,
   useInvalidation,
@@ -23,7 +23,6 @@ import {
 } from '../hooks.js';
 import type { ExpandedState, PanelProps, PanelState, ToggleTarget } from '../types.js';
 import { fmtTime } from '../util.js';
-import panelCss from '../panel.css';
 import { SectionHead } from './atoms.js';
 import { Badges } from './Badges.js';
 import { EditorForm } from './EditorForm.js';
@@ -64,19 +63,6 @@ export function Panel(props: PanelProps): ReactElement | null {
   const useChatSafe: UseChat = typeof useChat === 'function' ? useChat : fallbackChat;
   const chatSignal = useChatSafe((cs) => deriveChatSignal(cs));
   const activity = resolveActivity(status, chatSignal, agentError);
-
-  // 样式元素绑定组件生命周期：挂载创建、卸载/hot-reload 移除；不残留旧副本。
-  React.useEffect(() => {
-    const stale = document.querySelectorAll(`style[data-plugin="${STYLE_PLUGIN_ID}"]`);
-    stale.forEach((n) => n.remove());
-    const style = document.createElement('style');
-    style.dataset.plugin = STYLE_PLUGIN_ID;
-    style.textContent = panelCss;
-    document.head.append(style);
-    return () => {
-      style.remove();
-    };
-  }, []);
 
   // 状态来自共享 feed（与立绘同一份快照）；错误/未授权按旧语义映射。
   // 声明在所有 hooks 之后：首个 forbidden 到达时，各 hook 的 reset 已注册。

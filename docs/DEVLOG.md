@@ -54,6 +54,7 @@
 1. **`.gitignore` 吞掉插件源码**：模板里 `lib/` 没有前导斜杠，匹配任意层级，插件产物被忽略、克隆后起不来。→ 收窄为 `/lib/` 并给插件生成物留显式出口。
 2. **`make dev` 没传 `DSH_HOME`**：`DSH_HOME ?=` 只是 make 变量、没 export，本机碰巧有旧 profile 掩盖了问题，换机即崩。→ `export DSH_HOME`。
 3. **全新 home 的相对 link 坑**：仓库 profile 的相对 `link:` 只在特定目录成立；解析不到的模块 cordis 只记日志不崩，插件静默缺席。→ 外部 home 一律物化绝对 link。
+4. **构建期拉模型的端点和代理不能混用**：`HF_ENDPOINT=hf-mirror.com` 再配上 `HTTP(S)_PROXY` 时，镜像把经代理的请求重定向回 `huggingface.co`，resolve 响应因此没有 `X-Repo-Commit`，固定 revision 的 `snapshot_download` 直接报 `FileMetadataError: Distant resource does not seem to be on huggingface.co`（同一个 URL 直连时反而正常）。→ 端点按出口选：有代理走官方 `huggingface.co`（构建期用 host 网络够到本机代理），直连才用镜像；未显式设置 `HF_ENDPOINT` 时由启动器判定并打印实际端点。模型仍按 revision 固定。
 
 ### dsh 机制
 
@@ -65,6 +66,10 @@
 6. **工具结果只有 `output.render` 对模型可见**：候选 id 放进 `value` 模型拿不到，两段式工具第二段发不出来。→ 模型要用的字段必须写进 render。
 7. **`webServer` 在插件 apply 时可能未就绪**：`ctx.get('webServer')` 是即时读取，拿到 `undefined` 就静默 404。→ 用 `ctx.inject(['webServer'], …)` 延迟到服务可用再注册。
 8. **个人端点差点写进仓库草稿**：该 provider 的 baseURL 会回落官方端点，只填 key 时 key 会被发到错误的地方；配置补丁的 `disabled` 又不支持条件表达式。→ 仓库草稿保持注释掉的 opt-in，个人端点只放本机独立 patch 层。
+9. **pre-step 的 `reject` 会吞掉已 claim 的用户消息**：checker 识别记忆请求后直接 reject，发生在 dsh 提交 `user/message` 之前；网页撤去当轮临时消息后，聊天和轨迹都只剩空 `blocked` turn。→ 纯保留照常进入角色并附真实回执；破坏性请求先提交用户消息，再让历史隔离窗口覆盖本轮命令，清理后用新原生回合回应安全回执。控制检查失败保留安全输入并显示原生错误，重试不重复提交；旧隔离正文仍不得复活。原生 Session / JSONL / provider 回归覆盖保存、删除和检查失败三条路径。
+10. **未打开状态面板时立绘掉到页面底部**：定位 CSS 由 `Panel` 挂载时注入，而立绘独立 portal 到 `document.body`。→ 共享样式改由客户端插件 effect 拥有；关闭面板和冷刷新都保持视口右下角定位。
+11. **历史上执行过遗忘后，新会话连首句问候都被吞掉**：迟到的会话 enrollment 使用 `session.seq - 1`，将刚 splice/claim 的第一条新输入也包含进旧输入 fence；有效历史为空虽已完成隔离证明，证据读取仍返回 `LEPI_INPUT_RESUBMIT_REQUIRED`。→ 迟到接入只隔离不可变的原生恢复/种子前缀（`firstLiveSeq - 1`），不使用移动的日志尾部。新增原生回归覆盖「旧会话遗忘完成 → 新会话首句」，同时保持冷恢复旧 inbox 和 fork 前缀的隔离测试。
+12. **输入撞上并发政策变化仍消失**：检查已读取合法新输入，但等待期间其他操作推进 epoch；直接 `reject` 会消费原生 claim，不留消息。单纯重检再 `next()` 也不安全，因为角色 assembly 已在旧 epoch 形成。→ 原生新输入先关闭读取门并记录，回合明确记为需重新提交/政策中止；追加材料由 sweeper 重新隔离。回归覆盖检查期变更、无遗忘的授权变更、其他 agent 的遗忘取消，以及下游 pre-step 变更，验证独立输入保留、目标不再进入后续请求。
 
 ### Hindsight（记忆服务）
 
@@ -94,6 +99,7 @@
 
 - "关于 A"与"A 参与"的区分仍是"机器候选 + 用户确认"，没有自动切分。
 - "值不值得写"是启发式 + 判定后端，不是纯工具化。教训：让模型主动调写入工具会系统性漏调（记忆静默不落库），所以自动写保留为兜底，工具只作显式强化。
+- checker（控制模型）本身不可用/超时时仍走"登记 request、把已 claim 的输入 steer 回 inbox、结束当轮"的停车路径：消息不会入库丢失，但在操作者 retry 之前不会落回会话面，用户看到的是空 turn。是否也改成"降级继续对话"需要一次产品决定；当前保留停车与 `/lepimemory/retry` 工作流。
 
 ---
 

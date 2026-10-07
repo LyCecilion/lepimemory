@@ -12,11 +12,12 @@ import type {} from '@deepseek-ai/dsh-client-locale/client';
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client';
 import type {} from '@deepseek-ai/dsh-client-ui-session/client';
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client';
-import { NS, PANEL_KIND, PANEL_TAB_ID } from './constants.js';
+import { NS, PANEL_KIND, PANEL_TAB_ID, STYLE_PLUGIN_ID } from './constants.js';
 import { createStateFeed, type StateFeed } from './feed.js';
 import { dicts } from './locales.js';
 import { AvatarOverlay } from './components/AvatarOverlay.js';
 import { Panel } from './components/Panel.js';
+import panelCss from './panel.css';
 
 /** 需要的宿主服务：slot 注册表、locale、右栏 tab 类型注册表。 */
 export const inject = ['slots', 'locale', 'sidebarRightTabs'];
@@ -28,6 +29,14 @@ interface FeedInjection {
 }
 
 export function apply(ctx: Context): void {
+  ctx.effect(() => {
+    document.querySelectorAll(`style[data-plugin="${STYLE_PLUGIN_ID}"]`).forEach((n) => n.remove());
+    const style = document.createElement('style');
+    style.dataset.plugin = STYLE_PLUGIN_ID;
+    style.textContent = panelCss;
+    document.head.append(style);
+    return () => style.remove();
+  }, 'lepimemory-state: shared styles');
   ctx.effect(() => ctx.locale.register(NS, dicts), 'lepimemory-state: locale');
   const tLe = ctx.locale.bind(NS);
   // 面板与立绘共享同一份 /lepimemory/state 轮询源；注册各自独立
@@ -61,7 +70,7 @@ export function apply(ctx: Context): void {
       Panel,
     ),
   );
-  // 立绘：仍在输入框上方的 dock，不随面板搬走。
+  // dock 只提供会话 hooks；立绘通过 portal 固定在视口右下角，不占输入框布局。
   ctx.slots.inject('conversation.input.dock', () =>
     ctx.slots.register(
       {
