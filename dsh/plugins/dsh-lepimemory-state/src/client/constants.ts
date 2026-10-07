@@ -7,7 +7,7 @@ import type { LepKey } from './locales.js';
 
 /** 插件身份（locale 命名空间、样式节点标记、tab id 前缀）。 */
 export const NS = 'lepimemoryState';
-/** 样式节点标记，Panel 生命周期据此清理旧副本。 */
+/** 样式节点标记，由客户端插件生命周期统一创建与清理。 */
 export const STYLE_PLUGIN_ID = '@dsh-external/dsh-lepimemory-state';
 /** 右侧栏标签页：本实现在 tab 系统的唯一身份，也是正文槽注册的 key。 */
 export const PANEL_TAB_ID = '@dsh-external/dsh-lepimemory-state/panel';

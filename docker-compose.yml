@@ -1,5 +1,14 @@
 # Fixed memory services. Run via the verified launcher so resolved connections
 # are injected in memory; existing data/cache volumes and old banks are retained.
+#
+# Build-time model bake egress: the launcher resolves HF_ENDPOINT from the
+# effective network path and passes it here. Not a free choice — the mirror and
+# a proxy are alternative paths: behind a proxy hf-mirror.com redirects to
+# huggingface.co, whose resolve response has no X-Repo-Commit and the pinned
+# snapshot_download fails its metadata check. Default is therefore the official
+# endpoint (reached through the forwarded proxy); set
+# HF_ENDPOINT=https://hf-mirror.com yourself only on a direct (proxy-less)
+# network. Models stay pinned to exact revisions either way.
 services:
   hindsight:
     image: lepimemory-hindsight:0.10.0
@@ -9,7 +18,7 @@ services:
       # Build-only host network reaches a loopback proxy; runtime stays bridged.
       network: host
       args:
-        HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
         HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
         HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
     container_name: hindsight
@@ -52,7 +61,7 @@ services:
       dockerfile: deploy/laya/Dockerfile
       network: host
       args:
-        HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+        HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
         HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
         HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
     ports:

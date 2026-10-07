@@ -44,7 +44,7 @@ DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make 
 - **profile 由 launcher 生成**：`install-profile` 把 `dsh/profiles/lepimemory` 复制进 `$DSH_HOME`，生成连接配置并物化插件 link。遇到不是这个 launcher 生成的同名目录会报 `LEPI_PROFILE_CONFLICT`——换一个新 home，不要删原目录。
 - **走原生认证**：打开 launcher 打印的认证链接（303 后清除 token），不要绕过认证直接读状态。
 - **没配云连接 = 只读**：`LEPI_LLM_BASE_URL` 和 `LEPI_LLM_API_KEY` 都为空时系统进入 `unconfigured` 状态，界面可看、不能对话，控制与记忆请求都被拒绝。系统绝不回落到任何默认官方端点。
-- **首次启动较慢，需要网络**：`make dev` 第一次会构建两个固定的记忆服务镜像（Hindsight、laya），只在首次构建时拉模型（默认走 `hf-mirror.com`）。两个服务不可达不影响核心界面与任务状态。
+- **首次启动较慢，需要网络**：`make dev` 第一次会构建两个固定的记忆服务镜像（Hindsight、laya），只在首次构建时按固定 revision 拉模型——模型不浮动。下载端点与出口成对选择：配了 `HTTP(S)_PROXY` 就构建期用 host 网络走官方 `huggingface.co`，直连网络才用 `hf-mirror.com`；两者不能混用，`hf-mirror.com` 会把经代理的请求重定向回 `huggingface.co`，固定 revision 的元数据校验随即失败。显式设置 `HF_ENDPOINT` 则完全按填写值走（见 [.env.example](.env.example)）。两个服务不可达不影响核心界面与任务状态。
 - 旧 `.env` 首次加载会一次性迁移：先备份权限 0600 的 `.env.legacy-*`，两个文件都不提交。
 
 统一入口（`make bootstrap` / `install-profile` / `dev` / `verify` / `check`）都由仓库固定的 Node 驱动。`make dev` 在启动前校验锁定的 CLI/插件版本与 `/lepimemory/health` 的 `core=true`，核心不兼容或 SQLite 失败就直接终止。

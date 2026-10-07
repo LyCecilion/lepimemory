@@ -78,6 +78,8 @@ export const DEFAULTS = Object.freeze({
   port: 3080,
   embeddingsLocalModel: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
   rerankerLocalModel: 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1',
+  // 部署检索栈的构建期端点。这里只是直连（无代理）默认值：启动器在未显式设置
+  // HF_ENDPOINT 且检测到 HTTP(S)_PROXY 时会改用官方 huggingface.co（见 runtime.ts）。
   hfEndpoint: 'https://hf-mirror.com',
 });
 
