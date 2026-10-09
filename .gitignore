@@ -1,10 +1,9 @@
 # 本地状态与机密 — 绝不提交
 .env
+.env.legacy*
 .dsh/
 node_modules/
-
-# 实验 dump 快照（纪律：放 /tmp；此处兜底防误提交）
-docs/research/artifacts/*.yml
+/.runtime/
 
 # 脱敏检查模式（含个人标识，绝不提交）
 .sanitize-patterns
@@ -167,6 +166,11 @@ eggs/
 .eggs/
 /lib/
 !dsh/plugins/**/lib/
+# Generated plugin/build artifacts (produced by scripts/build.mts, not committed).
+/dsh/plugins/dsh-lepimemory-state/lib/
+/dsh/plugins/dsh-lepimemory-state/client.js
+/dsh/plugins/dsh-lepimemory-state/client.js.map
+/scripts/dist/
 lib64/
 parts/
 sdist/

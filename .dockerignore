@@ -1,0 +1,7 @@
+.git
+.omp
+.dsh
+.runtime
+.env
+.env.legacy*
+**/node_modules

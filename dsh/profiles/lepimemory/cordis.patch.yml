@@ -1,11 +1,6 @@
-# Lepimemory profile patch — 草案 v0.1（2026-09-28，待评审）
-# ============================================================
-# 这是 profile 的「用户补丁层」，在 bundle 层之后生效。
-# 机制细节与调研证据见 docs/research/dsh-findings.md。
-# 本草案做两件事：
-#   1) 模型接入：追加一个 .env 引 key 的自定义模型端点；
-#   2) 能力面裁剪：声明 lepimemory 专用 agent preset（不含编码向工具），
-#      并把 agent preset registry 的默认指向它。
+# Lepimemory fixed-runtime profile.
+# The launcher overlays complete independently resolved routes before dsh starts.
+# No credentials or endpoint defaults are stored in this profile.
 #
 # 机制备忘（来自 0.1.7-rc.2 上游实现）：
 #   - 对已存在行的补丁会「整行替换 config」——每条 config 需重述全部键；
@@ -13,46 +8,25 @@
 #   - Web 面下，会话实际的能力/提示词面由 agent preset 的 plugins 列表决定
 #     （bundle 已把编码向各行从 host 面挪到 preset 面），所以裁剪落在 preset 上。
 
-# ── 1) 模型接入：自定义端点（.env 引 key 与 baseURL）──────────────
-# 与 web profile 中验证过的写法一致；模型清单按需增删。
-# baseURL 经 !!js 从环境读取（user patch 层官方支持 process.env 引用，
-# 见 packages/boot/app-boot/src/index.ts 的 userPatchesSchema 注释），
-# 端点地址不进仓库；LEPI_LLM_BASE_URL / GEEK_TECH_CLUB_API_KEY 见 .env.example。
+# ── 1) 模型路由：未由 launcher 配置时保持空，绝不回退官方端点 ───────
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
-    providers:
-      geek-tech-club:
-        displayName: 极创工作室招新
-        apiKeyEnv: GEEK_TECH_CLUB_API_KEY
-        api: openai-completions
-        baseURL: !!js "process.env.LEPI_LLM_BASE_URL || 'https://api.deepseek.com/v1'"
-        models:
-          - id: deepseek-flash
-            name: deepseek-flash
-          - id: deepseek-v4-pro
-            name: deepseek-v4-pro
-          - id: kimi-k2.6
-            name: kimi-k2.6
-          - id: glm-5.3
-            name: glm-5.3
-
-# 评委场景建议（待定）：把默认模型切到 .env 端点——评审机只需配一个 key。
-# 本机（常驻 profile）已启用 geek-tech-club；**仓库草稿默认不启用**——端点地址属个人资产、不入库，
-# 且留空 LEPI_LLM_BASE_URL 时 provider 会回落官方端点（key 会发错地方），故保持 opt-in。
-# 要启用：取消下面注释，并确保 .env 里设了 LEPI_LLM_BASE_URL。
-# - id: agent-default-model
-#   name: '@deepseek-ai/dsh-agent-default-model'
-#   config:
-#     provider: geek-tech-club
-#     model: deepseek-flash
-
+    providers: {}
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: lepimemory-role
+    model: !!js "process.env.LEPI_ROLE_MODEL || 'deepseek-flash'"
 # ── 2) 能力面裁剪：lepimemory 专用 agent preset ──────────────────
 # 说明：
 #   - 编码向能力（fs / 终端 / skills / 计划 / 待办 / 子代理等）一律不挂；
 #   - 「行动」工具留给自研插件（显式、可审计），不放开通用 shell；
-#   - 压缩（compaction）先禁用：避免把注入的记忆内容摘要掉（Phase 1 预判坑，
-#     接管方案见 CONCEPTS Phase 2「上下文管理策略」）。
+#   - 上下文管理（Lv1）：启用 dsh 的压缩后端（见 plugins 列表）。旧稿曾「先禁用」以防注入的
+#     记忆被摘要掉——2026-10-03 调研推翻该顾虑：① 状态段在 system/message 节点 0，**永不**被压
+#     （region.ts 只从第一个非 system 节点起选）；② recall 注入是普通 user 消息，滑出保留尾部会被
+#     摘要，但我们**每轮重新召回注入**、且 Hindsight 才是记忆真源，被压的旧 recall 只是冗余副本。
+#     故按上游推荐启用，并配 pruner 先裁超长工具输出。
 - insert:
     - id: preset-lepimemory
       name: "@deepseek-ai/dsh-agent-preset"
@@ -92,10 +66,25 @@
             config:
               fetch: true
               searchTimeoutMs: 60000
-          - id: compaction-basic
-            name: "@deepseek-ai/dsh-compaction-basic"
-            disabled: true # 先禁用（见上）；接管或替换后启用
-          # 行动工具（自研）后续挂在这里或由插件注册，见 docs/research/dsh-findings.md §6。
+          # ── 上下文管理（Lv1）：保留 / 压缩 / 筛选 / 重组 ──────────────
+          # 压缩服务必须落在 preset 的 **isolate realm** 里，否则 registry 拒绝挂载
+          # （"Preset services require isolate realms: compaction, toolResultPruner"）。
+          # 写法照上游 web-app 的 standard preset（`cordis:group` + `isolate`）。
+          # pruner 先做确定性裁剪（超长工具输出），压不动才真调 LLM 摘要；/compact 可手动压一次。
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: "@deepseek-ai/dsh-compaction-basic"
+              - id: command-compact
+                name: "@deepseek-ai/dsh-command-compact"
+              - id: tool-result-pruner
+                name: "@deepseek-ai/dsh-compaction-tool-result-pruner"
+          # 行动工具 write_note 由插件注册（src/action.ts）。
 
 # ── 3) 默认 preset：会话创建时默认用 lepimemory ──────────────────
 - id: agent-preset-registry
@@ -103,16 +92,8 @@
   config:
     default: lepimemory
 
-# 本 profile 覆盖状态行 config：对既有行的补丁是「整行替换 config」，
-# 所以这里必须**重述 stateFile**（否则插件退回兜底路径），再叠加 memory 配置。
+# profile 补丁整行替换配置；仅路径在此声明，模型/服务/政策由 resolved env 提供。
 - id: lepimemory-state
   config:
-    stateFile: !!js dshHomePath('lepimemory/state.json')
-    memory:
-      enabled: true
-      # 记忆服务地址：默认本机 Hindsight；端点走 .env（不进仓库）。
-      baseUrl: !!js process.env.HINDSIGHT_API_URL || 'http://127.0.0.1:8888'
-      bank: lepimemory
-      minSemantic: 0.35
-      maxItems: 4
-
+    databaseFile: !!js dshHomePath('lepimemory/runtime.sqlite')
+    dataRoot: !!js dshHomePath('lepimemory')

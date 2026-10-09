@@ -1,11 +1,8 @@
-# dsh-lepimemory-state bundle 层：插入状态注入行。
-# 状态文件路径经 dsh 自身的 home 解析（显式 home > $DSH_HOME > ~/.dsh）——
-# 与上游同款用法（packages/bundle/base/cordis.patch.yml 的 dshHomePath('sessions' / 'storages')）。
-# ⚠️ 不用 storages/：那是 storage-json 后端的根，本文件是插件自有物。
-# profile 补丁 / --patch 叠加可覆盖该行（对既有行的补丁为「整行替换 config」）——
-# 覆盖时**必须重述 stateFile**，否则会退回插件内兜底路径。
+# SQLite 运行核心：路径使用 dsh 自身的 home 解析，与 sessions 同源。
+# profile 覆盖此行时须重述 databaseFile 和 dataRoot。
 - insert:
     - id: lepimemory-state
       name: "@dsh-external/dsh-lepimemory-state"
       config:
-        stateFile: !!js dshHomePath('lepimemory/state.json')
+        databaseFile: !!js dshHomePath('lepimemory/runtime.sqlite')
+        dataRoot: !!js dshHomePath('lepimemory')
