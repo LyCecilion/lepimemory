@@ -1,80 +1,130 @@
-<!-- Lepimemory — 极创工作室第二次面试题 -->
+<!-- markdownlint-disable MD033 MD041 -->
 
 <div align="center">
 
-截至目前，该项目完全使用 AI 生成。我们将会在近期 human review 该项目并重写文档。
+> Is there truly no turning of the tide?<br/>
+> I ask myself, ask this ocean—if I were to cast myself into its embrace, would anything be different? Memory lives in the water, in the endless sea. It will tell you everything. It speaks of the deepest longings in the human heart: a world of mutual understanding has already been born, only to fall once more into slumber.<br/>
+> It will return. It never left.
+
+![Lepimemory Banner](/assets/banner.png)
+
+# 🦋 Lepimemory ✒️
+
+_✨ An AI Agent character that truly **persists**, ✨_<br/>
+with persistent state, personality, long-term memory, and real action capabilities.
 
 </div>
 
-# 蝶忆 Lepimemory
+> [!NOTE]
+> The project will stop adding new features before Geek Tech Club's Demo Day, and will only take bug fixes, experience improvements, and routine maintenance from here on.
+>
+> Almost all of the features the project claims are implemented, but the development team does not assert that the project is production-ready. The codebase still contains plenty of hardcoded logic and mock implementations written for the demo, and Lepimemory will keep needing the team's ongoing iteration and refinement.
 
-> 一个会**记住过去、保持稳定人格、采取真实行动**的角色 Agent，而且它的每一步变化都可以查证。
-> 极创工作室第二次面试题（形式：PPT + 公开仓库），题目原文见 [CHALLENGE.md](CHALLENGE.md)。
+## 📖 About
 
-蝶忆不是"给聊天模型塞一段人设"。它在模型外面维护着三样东西：
+Lepimemory is the complete AI Agent system LyCecilion built for Geek Tech Club's [second interview challenge](https://join.geek-tech.club/problems2/heart-heart-heart) — "design and implement an intelligent character Agent with persistent state, personality, memory, and action capabilities".
 
-- **状态**：心境与关系是存进数据库的数值，随真实事件更新，再翻译成语气提示进入模型输入；
-- **记忆**：说过的话要经过理解、判定、授权、来源核对，才会进入长期记忆；下次回答前再筛一遍，看哪些现在允许用；
-- **行动**：答应写便条，就真的生成文件；文件不存在就不算成功。
+The project aims to go beyond the unremarkable memory system designs of traditional AI Agent systems: instead of plain text and naive RAG, it uses a self-developed emotion module and a memory system built on Hindsight, SQLite, and the like. Above the underlying LLM, Lepimemory independently maintains a state machine, a controlled memory lifecycle, and genuine system action capabilities.
 
-页面右侧的**状态面板**是这套系统的仪表盘：当前状态、处理进度、这轮用了哪些来源、哪些事情确实完成了，都能看到。想向别人讲解它怎么工作，从 [docs/MECHANISM.md](docs/MECHANISM.md) 开始。
+## ✨ Features
 
-**当前进度**：Lv1/Lv2 的完整闭环和 Lv3 的状态立绘已经实现，正在准备演示。自动化检查（行为测试 + SQLite 冒烟 + 类型/风格检查）全部通过，数字以 `make verify` / `make check` 的实际输出为准。已知边界与未实现项见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 7 节。
+Lepimemory implements the following features, as required by the interview challenge.
 
-## 快速开始
+- **The character's existence is continuous and coherent.** A self-developed emotion module keeps the character consistent across conversations.
+- **It has a past and can act.** A mature system maintains memory, handles tool calls, and provides observability.
+- **It shows the character's inner thoughts.** It supports Live2D integration, or a plain rotating-sticker scheme, to present the character's mood and thoughts.
 
-前置：Docker（含 Compose v2）、make、Bash、curl、tar、OpenSSL、shasum。
-入口**不使用**系统 Node 或全局 dsh/pnpm：`make bootstrap` 校验并安装固定的 Node **24.20.0** / pnpm **10.28.2**，dsh 锁定 **0.1.7-rc.2**。
+The project intends to keep building out more capabilities in the future, such as real-time voice conversation.
+
+## 🚀 Quick Start
+
+Make sure the machine has the following:
+
+- Docker (with Docker Compose v2)
+- make, Bash, curl, tar, OpenSSL, shasum
+
+Lepimemory's entry points are driven by the project's pinned toolchain, so there is no need to install Node, pnpm, and DeepSeek Harness globally beforehand. `make bootstrap` automatically downloads and verifies the pinned Node 24.20.0 and pnpm 10.28.2; `make install-profile` installs DeepSeek Harness into the specified directory.
 
 ```bash
+# Prepare the pinned toolchain
 make bootstrap
-# 没有 .env 时才复制样例；不要覆盖已有凭据。
-cp .env.example .env
-# 成组填写 LEPI_LLM_BASE_URL / LEPI_LLM_API_KEY，见下节。
-make install-profile DSH_HOME=/tmp/lepimemory-new-home
 
-# 用全新的 home / bank 启动
-DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make dev
+# Configure environment variables
+cp .env.example .env
+# Edit .env and fill in LEPI_LLM_BASE_URL and LEPI_LLM_API_KEY
+
+# Install and generate the profile
+make install-profile DSH_HOME=/tmp/lepimemory-home
+
+# Start the development server
+DSH_HOME=/tmp/lepimemory-home PORT=3181 LEPI_BANK=lepimemory-demo make dev
 ```
 
-启动前要知道的事：
+The first time `make dev` runs, it builds and starts the two memory service images, Hindsight and Laya, via Docker.
 
-- **安装是冻结安装**：只执行 `pnpm install --frozen-lockfile`，不重新解析依赖；不使用全局 dsh/pnpm/npx，也不手工 `dsh plugin add`。
-- **验证用全新数据**：演示和验证一律用新的 home / bank。不要用 `make reset` 制造"干净结果"，旧 bank 与用户数据一律保留。
-- **profile 由 launcher 生成**：`install-profile` 把 `dsh/profiles/lepimemory` 复制进 `$DSH_HOME`，生成连接配置并物化插件 link。遇到不是这个 launcher 生成的同名目录会报 `LEPI_PROFILE_CONFLICT`——换一个新 home，不要删原目录。
-- **走原生认证**：打开 launcher 打印的认证链接（303 后清除 token），不要绕过认证直接读状态。
-- **没配云连接 = 只读**：`LEPI_LLM_BASE_URL` 和 `LEPI_LLM_API_KEY` 都为空时系统进入 `unconfigured` 状态，界面可看、不能对话，控制与记忆请求都被拒绝。系统绝不回落到任何默认官方端点。
-- **首次启动较慢，需要网络**：`make dev` 第一次会构建两个固定的记忆服务镜像（Hindsight、laya），只在首次构建时按固定 revision 拉模型——模型不浮动。下载端点与出口成对选择：配了 `HTTP(S)_PROXY` 就构建期用 host 网络走官方 `huggingface.co`，直连网络才用 `hf-mirror.com`；两者不能混用，`hf-mirror.com` 会把经代理的请求重定向回 `huggingface.co`，固定 revision 的元数据校验随即失败。显式设置 `HF_ENDPOINT` 则完全按填写值走（见 [.env.example](.env.example)）。两个服务不可达不影响核心界面与任务状态。
-- 旧 `.env` 首次加载会一次性迁移：先备份权限 0600 的 `.env.legacy-*`，两个文件都不提交。
+Configure the LLM credentials as described in [Configuration](#️-configuration). Without LLM credentials, the system starts in an unconfigured state: the frontend can display the status, but no conversation can be started. To avoid credential conflicts in the demo, Lepimemory does not support specifying LLM credentials from anywhere else for now.
 
-统一入口（`make bootstrap` / `install-profile` / `dev` / `verify` / `check`）都由仓库固定的 Node 驱动。`make dev` 在启动前校验锁定的 CLI/插件版本与 `/lepimemory/health` 的 `core=true`，核心不兼容或 SQLite 失败就直接终止。
+Once startup succeeds, the terminal prints an access URL with authentication parameters; open it in a browser to get in.
 
-## 配置
+## 📦 Installation
 
-所有运行配置走 `LEPI_*` 环境变量，样例见 [.env.example](.env.example)。凭据字段一律留空，真值只放本机 `.env`（已 gitignore）。
+The launch scripts provided so far only support the installation route described in [Quick Start](#-quick-start). Other installation methods will be added in a future iteration.
 
-- **共享连接** `LEPI_LLM_BASE_URL` + `LEPI_LLM_API_KEY`：成对填写，要么都填、要么都空。只填一项启动时报 `LEPI_CONNECTION_INCOMPLETE`，key 不会发往任何端点。
-- **每路由 override**（`LEPI_ROLE_*` / `LEPI_PROCESS_*` / `LEPI_CONTROL_FALLBACK_*` / `LEPI_HINDSIGHT_*`）：不设置就整组继承共享连接；要覆盖就必须 URL/key 成组填，不做部分继承。
-- **`LEPI_BANK`**：长期记忆库的名字，默认 `lepimemory-v2`（拒绝旧名 `lepimemory`）；演示用新的 `lepimemory-demo-*`。
+## ⚙️ Configuration
 
-## 仓库结构
+Lepimemory manages LLM credentials uniformly through `LEPI_*` environment variables. Copy `.env.example` to `.env`, then modify the following fields:
 
-| 路径                                                                                                     | 说明                                                                                                                            |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/src/runtime.ts`（生成 `scripts/dist/runtime.js`） | 固定运行时入口：`bootstrap` / `build` / `install-profile` / `dev` / `verify` / `check`                                          |
-| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml`                                                | 根工作区：锁定 Node/pnpm/dsh 版本与依赖（frozen install）                                                                       |
-| `dsh/profiles/lepimemory/`                                                                               | profile 源：人设 + 能力面裁剪 + 隔离 realm；由 launcher 复制生成到 `$DSH_HOME`                                                  |
-| `dsh/plugins/dsh-lepimemory-state/src/`                                                                  | 自研角色运行时插件的手写源码（服务端 `src/*.ts`、共享 `src/shared/*.ts`、客户端 `src/client/**`）；`lib/`、`client.js` 是生成物 |
-| `deploy/hindsight/` · `deploy/laya/`                                                                     | 两个记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型）                                                               |
-| `docker-compose.yml`                                                                                     | 记忆服务编排（仅 loopback 端口；复用既有数据/缓存卷）                                                                           |
-| `docs/`                                                                                                  | 机制导览、架构说明、开发日志                                                                                                    |
-| `.env.example`                                                                                           | 环境变量样例（凭据留空）                                                                                                        |
+- Shared LLM connection: `LEPI_LLM_BASE_URL` and `LEPI_LLM_API_KEY`.
+- Per-route overrides: `LEPI_ROLE_*` (the character's main model), `LEPI_PROCESS_*` (the processing model), `LEPI_CONTROL_FALLBACK_*` (fallback route), and `LEPI_HINDSIGHT_*` (memory backend model); each can point at a different endpoint.
+- Memory bank identifier: `LEPI_BANK`, which sets the storage bank identifier for long-term memory (defaults to `lepimemory-v2`).
 
-## 文档地图
+## 📁 Project Structure
 
-- [docs/MECHANISM.md](docs/MECHANISM.md) — 机制与页面导览：向别人讲解时从这里开始
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构说明：模块职责、数据流、设计取舍、边界
-- [docs/DEVLOG.md](docs/DEVLOG.md) — 开发日志：里程碑与踩坑台账
-- [dsh/README.md](dsh/README.md) — 开发者指南：构建、验证、源码结构、事务边界
-- [LOCAL_HANDOFF.md](LOCAL_HANDOFF.md) — 本机开发启动卡（不用于对外演示）
-- [CHALLENGE.md](CHALLENGE.md) — 题目原文
+```text
+lepimemory/
+├── dsh/
+│   ├── profiles/lepimemory/          the dsh install profile (model routes, agent preset, persona)
+│   └── plugins/dsh-lepimemory-state/ the character kernel
+│       ├── src/                      hand-written TypeScript
+│       │   ├── index.ts              entry: wiring, hooks, notices
+│       │   ├── config.ts store.ts    configuration and the single SQLite source of truth
+│       │   ├── evidence.ts           session citations (metadata only)
+│       │   ├── processor.ts contracts.ts control.ts
+│       │   │                         structured model calls, closed schemas, memory intents
+│       │   ├── memory*.ts admission.ts candidate-store.ts task-store.ts
+│       │   │                         memory lifecycle: pipeline, authorisation, queue
+│       │   ├── write-worker.ts curate-worker.ts hindsight.ts recall*.ts
+│       │   │                         Hindsight retention, curation and recall
+│       │   ├── machine.ts state-runtime.ts      mood / relation state machine
+│       │   ├── action.ts                        tools with real side effects
+│       │   ├── history.ts panel.ts              surface redaction and the HTTP panel
+│       │   ├── shared/               browser-safe definitions shared with the client
+│       │   └── client/               hand-written TSX for the browser panel and avatar
+│       ├── test/                     six node:test behaviour suites
+│       ├── assets/avatar/            62 GIF frames for the avatar overlay
+│       ├── lib/                      GENERATED server output
+│       └── client.js                 GENERATED browser bundle
+├── scripts/                          pinned toolchain bootstrap, build driver, launcher, verification
+├── deploy/                           Hindsight and Laya Dockerfiles, Laya service source
+├── assets/                           repository imagery
+└── docs/                             technical documentation (see below)
+```
+
+`lib/`, `client.js` and `scripts/dist/` are build outputs and are never edited by hand. The only supported entry points are the `make` targets listed above. Runtime state lives outside the source tree, in `DSH_HOME` (the repository-local `.dsh/` by default).
+
+## 📚 Documentation
+
+The full documentation set lives in [`docs/`](./docs/):
+
+- [Architecture](./docs/ARCHITECTURE.md) — the system, one turn end to end, design principles
+- [Project Structure](./docs/PROJECT-STRUCTURE.md) — every directory and module, with responsibilities
+- [Runtime](./docs/RUNTIME.md) / [Deployment](./docs/DEPLOYMENT.md) / [Configuration](./docs/CONFIGURATION.md) — toolchain, services and the complete `LEPI_*` reference
+- [Memory](./docs/MEMORY.md) / [Recall](./docs/RECALL.md) — the write and read halves of the memory lifecycle
+- [State and Emotion](./docs/STATE-AND-EMOTION.md) / [Action](./docs/ACTION.md) / [Control](./docs/CONTROL.md) — the character kernel
+- [Observability](./docs/OBSERVABILITY.md) / [UI](./docs/UI.md) — the audit ledger and the browser surface
+- [Testing](./docs/TESTING.md) / [Development](./docs/DEVELOPMENT.md) / [Troubleshooting](./docs/TROUBLESHOOTING.md) — verification and day-to-day work
+- [Challenge Mapping](./docs/CHALLENGE-MAPPING.md) / [Glossary](./docs/GLOSSARY.md) — how the implementation answers the brief, and the shared vocabulary
+
+## 📄 License
+
+[MIT LICENSE](./LICENSE)
