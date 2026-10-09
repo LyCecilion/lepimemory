@@ -80,7 +80,50 @@ Lepimemory manages LLM credentials uniformly through `LEPI_*` environment variab
 
 ## 📁 Project Structure
 
-(complete this)
+```text
+lepimemory/
+├── dsh/
+│   ├── profiles/lepimemory/          the dsh install profile (model routes, agent preset, persona)
+│   └── plugins/dsh-lepimemory-state/ the character kernel
+│       ├── src/                      hand-written TypeScript
+│       │   ├── index.ts              entry: wiring, hooks, notices
+│       │   ├── config.ts store.ts    configuration and the single SQLite source of truth
+│       │   ├── evidence.ts           session citations (metadata only)
+│       │   ├── processor.ts contracts.ts control.ts
+│       │   │                         structured model calls, closed schemas, memory intents
+│       │   ├── memory*.ts admission.ts candidate-store.ts task-store.ts
+│       │   │                         memory lifecycle: pipeline, authorisation, queue
+│       │   ├── write-worker.ts curate-worker.ts hindsight.ts recall*.ts
+│       │   │                         Hindsight retention, curation and recall
+│       │   ├── machine.ts state-runtime.ts      mood / relation state machine
+│       │   ├── action.ts                        tools with real side effects
+│       │   ├── history.ts panel.ts              surface redaction and the HTTP panel
+│       │   ├── shared/               browser-safe definitions shared with the client
+│       │   └── client/               hand-written TSX for the browser panel and avatar
+│       ├── test/                     six node:test behaviour suites
+│       ├── assets/avatar/            62 GIF frames for the avatar overlay
+│       ├── lib/                      GENERATED server output
+│       └── client.js                 GENERATED browser bundle
+├── scripts/                          pinned toolchain bootstrap, build driver, launcher, verification
+├── deploy/                           Hindsight and Laya Dockerfiles, Laya service source
+├── assets/                           repository imagery
+└── docs/                             technical documentation (see below)
+```
+
+`lib/`, `client.js` and `scripts/dist/` are build outputs and are never edited by hand. The only supported entry points are the `make` targets listed above. Runtime state lives outside the source tree, in `DSH_HOME` (the repository-local `.dsh/` by default).
+
+## 📚 Documentation
+
+The full documentation set lives in [`docs/`](./docs/):
+
+- [Architecture](./docs/ARCHITECTURE.md) — the system, one turn end to end, design principles
+- [Project Structure](./docs/PROJECT-STRUCTURE.md) — every directory and module, with responsibilities
+- [Runtime](./docs/RUNTIME.md) / [Deployment](./docs/DEPLOYMENT.md) / [Configuration](./docs/CONFIGURATION.md) — toolchain, services and the complete `LEPI_*` reference
+- [Memory](./docs/MEMORY.md) / [Recall](./docs/RECALL.md) — the write and read halves of the memory lifecycle
+- [State and Emotion](./docs/STATE-AND-EMOTION.md) / [Action](./docs/ACTION.md) / [Control](./docs/CONTROL.md) — the character kernel
+- [Observability](./docs/OBSERVABILITY.md) / [UI](./docs/UI.md) — the audit ledger and the browser surface
+- [Testing](./docs/TESTING.md) / [Development](./docs/DEVELOPMENT.md) / [Troubleshooting](./docs/TROUBLESHOOTING.md) — verification and day-to-day work
+- [Challenge Mapping](./docs/CHALLENGE-MAPPING.md) / [Glossary](./docs/GLOSSARY.md) — how the implementation answers the brief, and the shared vocabulary
 
 ## 📄 License
 
