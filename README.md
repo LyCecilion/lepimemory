@@ -1,80 +1,84 @@
-<!-- Lepimemory — 极创工作室第二次面试题 -->
-
-<div align="center">
-
-截至目前，该项目完全使用 AI 生成。我们将会在近期 human review 该项目并重写文档。
-
-</div>
-
 # 蝶忆 Lepimemory
 
-> 一个会**记住过去、保持稳定人格、采取真实行动**的角色 Agent，而且它的每一步变化都可以查证。
-> 极创工作室第二次面试题（形式：PPT + 公开仓库），题目原文见 [CHALLENGE.md](CHALLENGE.md)。
+蝶忆（Lepimemory）是面向极创工作室第二次面试题（[CHALLENGE.md](CHALLENGE.md)）实现的角色 Agent 系统。
 
-蝶忆不是"给聊天模型塞一段人设"。它在模型外面维护着三样东西：
+系统在底层大语言模型之外，独立维护了状态机、受控记忆生命周期与真实系统行动能力：
 
-- **状态**：心境与关系是存进数据库的数值，随真实事件更新，再翻译成语气提示进入模型输入；
-- **记忆**：说过的话要经过理解、判定、授权、来源核对，才会进入长期记忆；下次回答前再筛一遍，看哪些现在允许用；
-- **行动**：答应写便条，就真的生成文件；文件不存在就不算成功。
+- 显式状态机：心境与关系参数由 SQLite 持久化管理，随真实交互事件更新并按 6 小时半衰期自然衰减，根据偏离基线程度翻译为语气提示注入模型上下文；
+- 受控记忆生命周期：用户输入经历意图解析、事实候选抽取、Laya 准入评估、权限检查与不可变快照对账；生成回复前经由策略门禁过滤并附带来源标签；
+- 真实系统行动：角色调用工具（如写便签）必须在磁盘实际创建实体文件并通过哈希对账，明确区分语言表达与系统行为；
+- 全程可观测：右侧状态面板提供心境指标、任务队列进度、8 个 History 审计选项卡与单轮引用的具体记忆来源。
 
-页面右侧的**状态面板**是这套系统的仪表盘：当前状态、处理进度、这轮用了哪些来源、哪些事情确实完成了，都能看到。想向别人讲解它怎么工作，从 [docs/MECHANISM.md](docs/MECHANISM.md) 开始。
+当前进度：已完成 Lv1/Lv2 核心闭环与 Lv3 状态驱动立绘。自动化检查（行为测试、SQLite 冒烟测试、TypeScript 类型检查与 ESLint 规范）全部通过。已知边界与未实现项详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 7 节。
 
-**当前进度**：Lv1/Lv2 的完整闭环和 Lv3 的状态立绘已经实现，正在准备演示。自动化检查（行为测试 + SQLite 冒烟 + 类型/风格检查）全部通过，数字以 `make verify` / `make check` 的实际输出为准。已知边界与未实现项见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 7 节。
+---
 
 ## 快速开始
 
-前置：Docker（含 Compose v2）、make、Bash、curl、tar、OpenSSL、shasum。
-入口**不使用**系统 Node 或全局 dsh/pnpm：`make bootstrap` 校验并安装固定的 Node **24.20.0** / pnpm **10.28.2**，dsh 锁定 **0.1.7-rc.2**。
+### 前置要求
+
+- Docker（含 Docker Compose v2）
+- make、Bash、curl、tar、OpenSSL、shasum
+
+系统入口由项目固定的工具链驱动，无需在全局安装 Node、pnpm 或 dsh。`make bootstrap` 会自动下载并校验固定的 Node 24.20.0 与 pnpm 10.28.2，dsh 锁定为 0.1.7-rc.2。
+
+### 启动步骤
 
 ```bash
+# 1. 准备固定工具链
 make bootstrap
-# 没有 .env 时才复制样例；不要覆盖已有凭据。
-cp .env.example .env
-# 成组填写 LEPI_LLM_BASE_URL / LEPI_LLM_API_KEY，见下节。
-make install-profile DSH_HOME=/tmp/lepimemory-new-home
 
-# 用全新的 home / bank 启动
-DSH_HOME=/tmp/lepimemory-demo PORT=3181 LEPI_BANK=lepimemory-demo-20261005 make dev
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填写 LEPI_LLM_BASE_URL 与 LEPI_LLM_API_KEY
+
+# 3. 安装并生成 profile
+make install-profile DSH_HOME=/tmp/lepimemory-home
+
+# 4. 启动开发服务器
+DSH_HOME=/tmp/lepimemory-home PORT=3181 LEPI_BANK=lepimemory-demo make dev
 ```
 
-启动前要知道的事：
+### 运行说明
 
-- **安装是冻结安装**：只执行 `pnpm install --frozen-lockfile`，不重新解析依赖；不使用全局 dsh/pnpm/npx，也不手工 `dsh plugin add`。
-- **验证用全新数据**：演示和验证一律用新的 home / bank。不要用 `make reset` 制造"干净结果"，旧 bank 与用户数据一律保留。
-- **profile 由 launcher 生成**：`install-profile` 把 `dsh/profiles/lepimemory` 复制进 `$DSH_HOME`，生成连接配置并物化插件 link。遇到不是这个 launcher 生成的同名目录会报 `LEPI_PROFILE_CONFLICT`——换一个新 home，不要删原目录。
-- **走原生认证**：打开 launcher 打印的认证链接（303 后清除 token），不要绕过认证直接读状态。
-- **没配云连接 = 只读**：`LEPI_LLM_BASE_URL` 和 `LEPI_LLM_API_KEY` 都为空时系统进入 `unconfigured` 状态，界面可看、不能对话，控制与记忆请求都被拒绝。系统绝不回落到任何默认官方端点。
-- **首次启动较慢，需要网络**：`make dev` 第一次会构建两个固定的记忆服务镜像（Hindsight、laya），只在首次构建时按固定 revision 拉模型——模型不浮动。下载端点与出口成对选择：配了 `HTTP(S)_PROXY` 就构建期用 host 网络走官方 `huggingface.co`，直连网络才用 `hf-mirror.com`；两者不能混用，`hf-mirror.com` 会把经代理的请求重定向回 `huggingface.co`，固定 revision 的元数据校验随即失败。显式设置 `HF_ENDPOINT` 则完全按填写值走（见 [.env.example](.env.example)）。两个服务不可达不影响核心界面与任务状态。
-- 旧 `.env` 首次加载会一次性迁移：先备份权限 0600 的 `.env.legacy-*`，两个文件都不提交。
+- 依赖锁定安装：构建过程采用 frozen install，不重新解析依赖，无需全局安装包管理器。
+- Profile 生成：`make install-profile` 将预设 profile 复制至指定的 `$DSH_HOME`，并自动建立插件软链接。
+- 服务容器：首次运行 `make dev` 时会通过 Docker 构建并启动 Hindsight 与 Laya 两个记忆服务镜像。
+- 只读模式：若未配置大模型连接凭据，系统将以只读（unconfigured）状态启动，前端可查看状态但无法发起对话，且不会回落至任何默认官方端点。
+- 访问界面：启动成功后，终端将输出带认证参数的访问 URL，通过浏览器打开即可进入。
 
-统一入口（`make bootstrap` / `install-profile` / `dev` / `verify` / `check`）都由仓库固定的 Node 驱动。`make dev` 在启动前校验锁定的 CLI/插件版本与 `/lepimemory/health` 的 `core=true`，核心不兼容或 SQLite 失败就直接终止。
+---
 
-## 配置
+## 环境变量配置
 
-所有运行配置走 `LEPI_*` 环境变量，样例见 [.env.example](.env.example)。凭据字段一律留空，真值只放本机 `.env`（已 gitignore）。
+系统运行配置统一通过 `LEPI_*` 环境变量管理（样例见 [.env.example](.env.example)），真实凭据仅保存在本地 `.env`（已被 gitignore）：
 
-- **共享连接** `LEPI_LLM_BASE_URL` + `LEPI_LLM_API_KEY`：成对填写，要么都填、要么都空。只填一项启动时报 `LEPI_CONNECTION_INCOMPLETE`，key 不会发往任何端点。
-- **每路由 override**（`LEPI_ROLE_*` / `LEPI_PROCESS_*` / `LEPI_CONTROL_FALLBACK_*` / `LEPI_HINDSIGHT_*`）：不设置就整组继承共享连接；要覆盖就必须 URL/key 成组填，不做部分继承。
-- **`LEPI_BANK`**：长期记忆库的名字，默认 `lepimemory-v2`（拒绝旧名 `lepimemory`）；演示用新的 `lepimemory-demo-*`。
+- 共享大模型连接：`LEPI_LLM_BASE_URL` 与 `LEPI_LLM_API_KEY`（需成对填写）。
+- 独立路由覆盖：`LEPI_ROLE_*`（角色主模型）、`LEPI_PROCESS_*`（处理模型）、`LEPI_CONTROL_FALLBACK_*`（备用路由）、`LEPI_HINDSIGHT_*`（记忆后端模型），支持单独指定不同端点。
+- 记忆库标识：`LEPI_BANK`，指定长期记忆的存储库标识（默认为 lepimemory-v2）。
+
+---
 
 ## 仓库结构
 
-| 路径                                                                                                     | 说明                                                                                                                            |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `Makefile` · `scripts/bootstrap-runtime.sh` · `scripts/src/runtime.ts`（生成 `scripts/dist/runtime.js`） | 固定运行时入口：`bootstrap` / `build` / `install-profile` / `dev` / `verify` / `check`                                          |
-| `package.json` · `pnpm-lock.yaml` · `pnpm-workspace.yaml`                                                | 根工作区：锁定 Node/pnpm/dsh 版本与依赖（frozen install）                                                                       |
-| `dsh/profiles/lepimemory/`                                                                               | profile 源：人设 + 能力面裁剪 + 隔离 realm；由 launcher 复制生成到 `$DSH_HOME`                                                  |
-| `dsh/plugins/dsh-lepimemory-state/src/`                                                                  | 自研角色运行时插件的手写源码（服务端 `src/*.ts`、共享 `src/shared/*.ts`、客户端 `src/client/**`）；`lib/`、`client.js` 是生成物 |
-| `deploy/hindsight/` · `deploy/laya/`                                                                     | 两个记忆服务的镜像定义（按 digest / revision 固定，不拉浮动模型）                                                               |
-| `docker-compose.yml`                                                                                     | 记忆服务编排（仅 loopback 端口；复用既有数据/缓存卷）                                                                           |
-| `docs/`                                                                                                  | 机制导览、架构说明、开发日志                                                                                                    |
-| `.env.example`                                                                                           | 环境变量样例（凭据留空）                                                                                                        |
+| 路径 | 说明 |
+| --- | --- |
+| `Makefile` · `scripts/` | 统一运行入口与构建脚本（bootstrap / build / install-profile / dev / verify / check） |
+| `package.json` · `pnpm-lock.yaml` | 根工作区配置，锁定 Node、pnpm 及 dsh 版本依赖 |
+| `dsh/profiles/lepimemory/` | profile 源配置：角色人设、能力面裁剪与压缩策略 |
+| `dsh/plugins/dsh-lepimemory-state/` | 自研角色运行时插件源码（服务端 TypeScript、共享定义与浏览器 TSX 客户端） |
+| `deploy/hindsight/` · `deploy/laya/` | 记忆检索（Hindsight）与准入评估（Laya）服务的镜像定义 |
+| `docker-compose.yml` | 记忆服务编排配置（仅绑定本地 loopback 端口） |
+| `docs/` | 机制导览、架构说明与开发日志 |
+| `.env.example` | 环境变量模板 |
 
-## 文档地图
+---
 
-- [docs/MECHANISM.md](docs/MECHANISM.md) — 机制与页面导览：向别人讲解时从这里开始
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构说明：模块职责、数据流、设计取舍、边界
-- [docs/DEVLOG.md](docs/DEVLOG.md) — 开发日志：里程碑与踩坑台账
-- [dsh/README.md](dsh/README.md) — 开发者指南：构建、验证、源码结构、事务边界
-- [LOCAL_HANDOFF.md](LOCAL_HANDOFF.md) — 本机开发启动卡（不用于对外演示）
-- [CHALLENGE.md](CHALLENGE.md) — 题目原文
+## 文档索引
+
+- [docs/MECHANISM.md](docs/MECHANISM.md) — 机制与页面导览：系统工作原理、页面区域说明与推荐演示路线
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构说明：模块职责划分、数据流转机制、设计取舍与已知边界
+- [docs/DEVLOG.md](docs/DEVLOG.md) — 开发日志：演进里程碑与踩坑记录
+- [dsh/README.md](dsh/README.md) — 开发者指南：构建命令、源码阅读顺序与事务边界
+- [LOCAL_HANDOFF.md](LOCAL_HANDOFF.md) — 本地开发运行备忘
+- [CHALLENGE.md](CHALLENGE.md) — 面试题目原文
