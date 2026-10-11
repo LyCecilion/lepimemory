@@ -15,6 +15,9 @@ with persistent state, personality, long-term memory, and real action capabiliti
 
 </div>
 
+> [!WARNING]
+> Lepimemory 的 demo version 将停止维护。
+<!---->
 > [!NOTE]
 > The project will stop adding new features before Geek Tech Club's Demo Day, and will only take bug fixes, experience improvements, and routine maintenance from here on.
 >
