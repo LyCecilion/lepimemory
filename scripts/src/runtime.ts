@@ -535,6 +535,44 @@ function runtimeEnv(cfg: LepiConfig): Record<string, string> {
   return env;
 }
 
+const COMPOSE_FILE = 'docker-compose.yml';
+
+/**
+ * Both services request `build.network: host` — a build-only host network, needed
+ * to reach a proxy bound to the host loopback. Docker 29 / buildx 0.37 refuse a
+ * build that requests an entitlement nobody granted, and `docker compose` offers
+ * no way to grant it: `build.entitlements` reaches the generated bake definition
+ * but buildx still aborts with `additional privileges requested`. So the images
+ * are built through `docker buildx bake`, which accepts `--allow`, and compose
+ * afterwards only starts the built tags.
+ *
+ * Returns null when the buildx plugin is unavailable, so the caller can keep the
+ * single compose invocation that grants host networking implicitly on the older
+ * releases.
+ */
+function buildMemoryImages(env: NodeJS.ProcessEnv): ChildProcess | null {
+  const probe = spawnSync('docker', ['buildx', 'version'], { encoding: 'utf8' });
+  if (probe.status !== 0) return null;
+  return spawn(
+    'docker',
+    ['buildx', 'bake', '--allow', 'network.host', '--load', '-f', COMPOSE_FILE],
+    { cwd: REPO_ROOT, stdio: 'inherit', env },
+  );
+}
+
+/** Start the compose project; `upFlags` is `--no-build` once bake built the tags. */
+function startMemoryContainers(env: NodeJS.ProcessEnv, upFlags: string[]): void {
+  const child = spawn('docker', ['compose', '--progress', 'plain', 'up', '-d', ...upFlags], {
+    cwd: REPO_ROOT,
+    stdio: 'inherit',
+    env,
+  });
+  child.on('error', () => warn('docker compose unavailable; core UI remains usable'));
+  child.on('exit', (code) => {
+    if (code !== 0) warn('memory service startup failed; core UI and task status remain available');
+  });
+}
+
 function startExternalServices(cfg: LepiConfig): void {
   const probe = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' });
   if (probe.status !== 0) {
@@ -544,14 +582,20 @@ function startExternalServices(cfg: LepiConfig): void {
   info(
     `building memory-service images (pinned model bake endpoint: ${buildHfEndpoint(cfg, process.env)})`,
   );
-  const child = spawn('docker', ['compose', '--progress', 'plain', 'up', '-d', '--build'], {
-    cwd: REPO_ROOT,
-    stdio: 'inherit',
-    env: { ...process.env, ...dockerEnv(cfg) },
-  });
-  child.on('error', () => warn('docker compose unavailable; core UI remains usable'));
-  child.on('exit', (code) => {
-    if (code !== 0) warn('memory service startup failed; core UI and task status remain available');
+  const env = { ...process.env, ...dockerEnv(cfg) };
+  const build = buildMemoryImages(env);
+  if (build === null) {
+    warn('docker buildx unavailable; falling back to `docker compose up --build`');
+    startMemoryContainers(env, ['--build']);
+    return;
+  }
+  build.on('error', () => warn('docker unavailable; memory services were not started'));
+  build.on('exit', (code) => {
+    if (code !== 0) {
+      warn('memory service image build failed; core UI and task status remain available');
+      return;
+    }
+    startMemoryContainers(env, ['--no-build']);
   });
 }
 
