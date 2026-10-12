@@ -16,7 +16,11 @@ with persistent state, personality, long-term memory, and real action capabiliti
 </div>
 
 > [!WARNING]
-> Lepimemory 的 demo version 将停止维护。
+> 在对极创工作室的第二次面试结束 Demo Showcase 后，零音决定停止 Lepimemory 的开发。
+>
+> 一方面，该项目的研发初衷仅为极创工作室二面题目的 Demo，为了保证尽可能切题 Level 1&2，零音为题述的部分要求满足了非常诡异且丑陋的实现；另一方面，零音正在研究新的 AI Agent 项目。该项目就此归档。
+>
+> 感谢在开发过程中提供过帮助、建议和支持的朋友们。
 <!---->
 > [!NOTE]
 > The project will stop adding new features before Geek Tech Club's Demo Day, and will only take bug fixes, experience improvements, and routine maintenance from here on.
